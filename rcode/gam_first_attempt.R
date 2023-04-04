@@ -3,6 +3,7 @@ library(mgcv)
 library(gamm4)
 library(gratia)
 library(viridis)
+library(broom)
 
 # ------------------------------------------------------------------------------
 # Import and format the data
@@ -14,7 +15,8 @@ filepath <- file.path(data_dir, "tau_rois_spec_eoad_long2.csv")
 tau_rois_long <- read.csv(filepath)
 
 # Replace missing values with NA
-cols_to_replace <- c("minority", "apoe_genotype", "apoe4_alleles", "apoe2_alleles", "cdrsob_baseline", "mmse_baseline")
+cols_to_replace <- c("minority", "apoe_genotype", "apoe4_alleles",
+                     "apoe2_alleles", "cdrsob_baseline", "mmse_baseline")
 for (col in cols_to_replace) {
   tau_rois[tau_rois[[col]] == "", col] <- NA
   tau_rois[tau_rois[[col]] == -999, col] <- NA
@@ -28,7 +30,12 @@ tau_rois_eoad <- tau_rois[(tau_rois$dx == "EOAD") & (tau_rois$pet_visits > 1), ]
 # Convert strings to factors
 tau_rois_eoad <- as.data.frame(unclass(tau_rois_eoad), stringsAsFactors = TRUE)
 tau_rois_long <- as.data.frame(unclass(tau_rois_long), stringsAsFactors = TRUE)
+tau_rois_long$minority <- factor(tau_rois_long$minority, ordered=FALSE)
 tau_rois_long$apoe4_allelesf <- factor(tau_rois_long$apoe4_alleles,
+                                       # levels = c(0, 1, 2),
+                                       # labels = c("0", "1", "2"),
+                                       ordered = TRUE)
+tau_rois_long$apoe2_allelesf <- factor(tau_rois_long$apoe2_alleles,
                                        # levels = c(0, 1, 2),
                                        # labels = c("0", "1", "2"),
                                        ordered = TRUE)
@@ -40,8 +47,10 @@ tau_rois_long <- tau_rois_long %>%
          sex = factor(sex, levels = c("f", "m")))
 eoad_subjs <- levels(as.factor(tau_rois_eoad$subj))
 rois <- levels(as.factor(tau_rois_eoad$roi))
-
 # ------------------------------------------------------------------------------
+# MODELS
+
+# Delta tau ~ baseline tau * region
 mod_roi <- gam(
   delta_suvr_peryear ~
     s(last_suvr, bs = "cs", k = 6) +
@@ -53,7 +62,8 @@ mod_roi <- gam(
   family = gaussian
 )
 summary(mod_roi)
-gam.check(mod_roi)
+gam.check(mod_roi) + abline(0, 1, col="red")
+appraise(mod_roi, method="simulate")
 plotdat <- plot.gam(mod_roi,
                     select=1,
                     shade=TRUE,
@@ -65,28 +75,141 @@ plotdat <- plot.gam(mod_roi,
                     # ylab="ΔTau-SUVR/year: time(t) to time(t+1)",
                     rug=FALSE) +
   abline(h = 0, lty = 1)
+
 plot.gam(mod_roi, pages=4)
 
 # ------------------------------------------------------------------------------
-mod_roi <- gam(delta_suvr_peryear ~
-                 -1 +
-                 roi +
-                 s(last_suvr, by=roi_full, bs="cs") +
-                 s(subj, bs="re"),
+# Delta tau ~ baseline tau * region
+# mod_roi_alt <- gam(
+#   delta_suvr_from_baseline ~
+#     # s(years_from_baseline_pet, bs = "cs") +
+#     # s(baseline_suvr, bs = "cs") +
+#     # ti(years_from_baseline_pet, baseline_suvr, bs = "cs") +
+#     te(years_from_baseline_pet, baseline_suvr, bs = "cs") +
+#     # s(years_from_baseline_pet, by = roi_full, bs = "cs", k = 6) +
+#     # s(baseline_suvr, by = roi_full, bs = "cs", k = 6) +
+#     # ti(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs", k=12) +
+#     # te(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs") +
+#     # te(years_from_baseline_pet, baseline_suvr, roi_full, bs = "fs") +
+#     s(roi_full, bs = "re") +
+#     s(subj, bs = "re"),
+#   data = tau_rois_long,
+#   REML = TRUE,
+#   family = gaussian
+# )
+mod_roi_alt <- gam(
+  delta_suvr_from_baseline ~
+    s(years_from_baseline_pet, bs = "cs") +
+    s(baseline_suvr, bs = "cs") +
+    # ti(years_from_baseline_pet, baseline_suvr, bs = "cs") +
+    # te(years_from_baseline_pet, baseline_suvr, bs = "cs") +
+    # s(years_from_baseline_pet, by = roi_full, bs = "cs", k = 6) +
+    # s(baseline_suvr, by = roi_full, bs = "cs", k = 6) +
+    # ti(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs", k=12) +
+    # te(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs") +
+    s(years_from_baseline_pet, roi_full, bs = "fs") +
+    s(baseline_suvr, roi_full, bs = "fs") +
+    # s(roi_full, bs = "re") +
+    s(subj, bs = "re"),
+  data = tau_rois_long,
+  REML = TRUE,
+  family = gaussian,
+  select = TRUE
+)
+summary(mod_roi_alt)
+gam.check(mod_roi_alt) + abline(0, 1, col="red")
+appraise(mod_roi_alt, method="simulate")
+plot.gam(mod_roi_alt, residuals=TRUE)
+plotdat <- plot.gam(mod_roi_alt,
+                    select=2,
+                    shade=TRUE,
+                    shift=fixef(mod_roi_alt)["(Intercept)"],
+                    residuals=TRUE,
+                    # xlim=c(0.95, 4),
+                    ylim=c(-0.4, 0.4),
+                    # xlab="Tau-SUVR at time(t)",
+                    # ylab="ΔTau-SUVR/year: time(t) to time(t+1)",
+                    rug=FALSE) +
+  abline(h = 0, lty = 1)
+
+
+mod_roi_apoe <- gam(
+  delta_suvr_from_baseline ~
+    # PARAMETRIC COEFS
+    # ----------------
+    # apoe4_allelesf +
+    # apoe2_allelesf +
+    #
+    # SMOOTHS OF INTEREST
+    # -------------------
+    s(baseline_suvr, bs = "cs") +
+
+    s(baseline_suvr, roi_full, bs = "fs") +
+
+    # s(baseline_suvr, by = apoe4_allelesf, bs = "cs") +
+    # s(baseline_suvr, by = apoe2_allelesf, bs = "cs") +
+    s(baseline_suvr, apoe4_allelesf, bs = "fs") +
+    # s(baseline_suvr, apoe2_allelesf, bs = "fs") +
+
+    s(fbb_centiloids_baseline, bs = "cs") +
+    ti(baseline_suvr, fbb_centiloids_baseline, bs = "cs") +
+
+    s(baseline_suvr, sex, bs = "fs") +
+
+    # s(baseline_suvr, minority, bs = "fs") +
+
+    s(age_at_baseline, bs = "cs") +
+    ti(baseline_suvr, age_at_baseline, bs = "cs") +
+
+    s(cdrsob_baseline, bs = "cs") +
+    ti(baseline_suvr, cdrsob_baseline, bs = "cs") +
+    #
+    # NUISANCE VARIABLES
+    # ------------------
+    # s(roi_full, bs = "re") +
+    s(years_from_baseline_pet, bs = "cs") +
+    s(years_from_baseline_pet, roi_full, bs = "fs") +
+    s(subj, bs = "re"),
+  data = tau_rois_long,
+  REML = TRUE,
+  family = gaussian,
+  select = TRUE
+)
+summary(mod_roi_apoe)
+plot.gam(mod_roi_apoe, residuals=TRUE)
+
+# ------------------------------------------------------------------------------
+mod_roi2 <- gam(delta_suvr_peryear ~
+                  s(last_suvr, roi_full, bs="fs"),
+                  # s(subj, bs="re"),
                data=tau_rois_long,
                na.action="na.omit",
                REML=TRUE,
                family=gaussian)
-summary(mod_roi)
-gam.check(mod_roi)
+summary(mod_roi2)
+gam.check(mod_roi2)
+tmod_roi2 <- tidy(mod_roi2, parametric=FALSE, conf.int=TRUE)
+sm <- mod_roi2$smooth[[1]]
+plotdat <- plot.gam(mod_roi2,
+                    select=1,
+                    shade=TRUE,
+                    shift=fixef(mod_roi2)["(Intercept)"],
+                    residuals=FALSE,
+                    # xlim=c(0.95, 4),
+                    # ylim=c(-0.4, 0.4),
+                    # xlab="Tau-SUVR at time(t)",
+                    # ylab="ΔTau-SUVR/year: time(t) to time(t+1)",
+                    rug=FALSE) +
+  abline(h = 0, lty = 1)
 
-plot.gam(mod_roi, select=4)
+plot.gam(mod_roi2)
 
-fv <- fitted_values(mod_roi, data=tau_rois_long)
+fv <- fitted_values(mod_roi2, data=tau_rois_long)
 fv |>
   ggplot(aes(x = last_suvr, y = fitted, colour = roi_full)) +
   geom_hline(yintercept = 0) +
-  geom_point(data = tau_rois_long, mapping = aes(y = delta_suvr_peryear), size = 0.2) +
+  geom_point(data = tau_rois_long, mapping = aes(y = delta_suvr_peryear),
+             size = 0.2) +
   geom_ribbon(aes(x = last_suvr, ymin = lower, ymax = upper, fill = roi_full,
                   colour = NULL),
               alpha = 0.2) +
@@ -99,6 +222,7 @@ fv |>
   facet_wrap(~ roi_full)
 
 # ------------------------------------------------------------------------------
+# Delta tau ~ baseline tau * CDR
 keep_cols <- c("delta_suvr_peryear", "roi_full", "last_suvr",
                "cdrsob_baseline", "cdrsob_baselinef", "subj")
 mod_cdr <- gam(
@@ -213,6 +337,7 @@ plotdat <- plot.gam(mod_ageatpet,
   abline(h = 0, lty = 1)
 
 # ------------------------------------------------------------------------------
+# GAMM4
 mod0 <- gamm4(value ~ roi + s(years_from_baseline_pet, by=roi, bs="cr"),
               random=~(1|subj) + (1|subj:roi),
               data=tau_rois_eoad, REML=TRUE, family=gaussian)
@@ -221,7 +346,8 @@ mod0 <- gamm4(value ~ roi +
                       s(years_from_baseline_pet, by=roi) +
                       t2(cdrsob_baseline, years_from_baseline_pet, by=roi),
               random=~(1|subj) + (1|subj:roi),
-              data=tau_rois_eoad[((tau_rois_eoad$cdrsob_baseline >= 0)),], REML=TRUE, family=gaussian)
+              data=tau_rois_eoad[((tau_rois_eoad$cdrsob_baseline >= 0)),],
+              REML=TRUE, family=gaussian)
 summary(mod0$gam)
 plot.gam(mod0$gam)
 mod1 <- gam(value ~ roi +
@@ -233,7 +359,10 @@ summary(mod1)
 plot(mod1, pages=1)
 
 # ------------------------------------------------------------------------------
-keep_cols <- c("delta_suvr_peryear", "roi", "last_suvr", "apoe4_alleles", "apoe2_alleles", "age_at_pet", "cdrsob_baseline", "fbb_centiloids_baseline", "subj")
+# Full model
+keep_cols <- c("delta_suvr_peryear", "roi", "last_suvr", "apoe4_alleles",
+               "apoe2_alleles", "age_at_pet", "cdrsob_baseline",
+               "fbb_centiloids_baseline", "subj")
 mod_all <- gam(delta_suvr_peryear ~
                  -1 +
                  roi +
