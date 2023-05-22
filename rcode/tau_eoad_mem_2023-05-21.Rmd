@@ -1,0 +1,170 @@
+---
+title: "Longitudinal tau-PET in LEADS: MEMs"
+output: html_notebook
+---
+
+# Setup
+
+##### Load packages
+```{r}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(viridis)
+```
+
+##### Load the data.
+```{r}
+data_dir <- "/Users/dschonhaut/Box/projects/leads_tau_spread/data/ssheets"
+tau <- read.csv(file.path(data_dir, "tau-rois-agg_eoad-long_2023-05-12.csv"))
+```
+
+##### Select data subset to analyze.
+```{r}
+tau <- tau[(tau["visit"]>0) & (tau["parc"]=="roi24"),]
+```
+
+##### Convert selected columns to factors.
+```{r}
+tau <- as.data.frame(unclass(tau), stringsAsFactors = TRUE)
+tau$site <- factor(tau$site)
+tau$visit <- factor(tau$visit, ordered = TRUE)
+# tau$apoe4_alleles <- factor(tau$apoe4_alleles, ordered = TRUE)
+subjs <- levels(tau$subj)
+rois <- levels(tau$roi)
+```
+
+##### Define plotting variables.
+```{r}
+blue3 <- "#141F52"
+blue2 <- "#2E45B8"
+blue1 <- "#D6DBF5"
+red3 <- "#861320"
+red2 <- "#E3120B"
+red1 <- "#FFA39F"
+cyan3 <- "#005F73"
+cyan2 <- "#3EBCD2"
+cyan1 <- "#6FE4FB"
+green3 <- "#0E6452"
+green2 <- "#1DC9A4"
+green1 <- "#D2F9F0"
+orange2 <- "#F97A1F"
+orange1 <- "#FCB583"
+yellow2 <- "#F9C31F"
+yellow1 <- "#FCDE83"
+black <- "#000000"
+gray5 <- "#333333"
+gray4 <- "#595959"
+gray3 <- "#B3B3B3"
+gray2 <- "#D9D9D9"
+white <- "#FFFFFF"
+colors <- c(blue2, red2, cyan2, orange2, yellow2, green2)
+blues <- c(blue1, blue2, blue3)
+reds <- c(red1, red2, red3)
+```
+
+# Model specification
+
+## Format dataframe
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "apoe4_alleles", "sex", "suvr",
+                "age_at_ftp_bl", "fbb_cl_bl", "cdr_sb_bl")
+# df <- df[complete.cases(df[,check_cols]),]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+
+# # Convert selected columns to deviation coding
+contrasts(df$sex) <- 'contr.sum'
+contrasts(df$roi) <- 'contr.sum'
+```
+
+## ROI-only models
+
+#### SUVR ~ ROI * Time
+```{r}
+mod_roi <- lmer(
+  suvr ~
+    # Discrete main effects
+    roi +
+    # Continuous main effects
+    ftp_yrs_from_bl +
+    # 2-way interactions
+    roi:ftp_yrs_from_bl +
+    # Random effects
+    (ftp_yrs_from_bl||subj/roi),
+  data=df,
+  REML=T
+)
+```
+
+#### Inspect model
+```{r}
+summary(mod_roi)
+```
+
+```{r}
+anova(mod_roi)
+```
+
+#### Plot effects
+```{r}
+plot(mod_roi)
+```
+
+## Full models
+
+#### SUVR: Full
+```{r}
+mod_full <- lmer(
+  suvr ~
+    # Discrete main effects
+    roi +
+    sex +
+    # Continuous main effects
+    age_at_ftp_bl +
+    apoe4_alleles +
+    cdr_sb_bl +
+    fbb_cl_bl +
+    ftp_yrs_from_bl +
+    # 2-way interactions
+    roi:sex +
+    roi:age_at_ftp_bl +
+    roi:apoe4_alleles +
+    roi:cdr_sb_bl +
+    roi:fbb_cl_bl +
+    roi:ftp_yrs_from_bl +
+    sex:ftp_yrs_from_bl +
+    age_at_ftp_bl:ftp_yrs_from_bl +
+    apoe4_alleles:ftp_yrs_from_bl +
+    cdr_sb_bl:ftp_yrs_from_bl +
+    fbb_cl_bl:ftp_yrs_from_bl +
+    # 3-way interactions
+    roi:sex:ftp_yrs_from_bl +
+    roi:age_at_ftp_bl:ftp_yrs_from_bl +
+    roi:apoe4_alleles:ftp_yrs_from_bl +
+    roi:cdr_sb_bl:ftp_yrs_from_bl +
+    roi:fbb_cl_bl:ftp_yrs_from_bl +
+    # Random effects
+    (ftp_yrs_from_bl||subj/roi),
+  data=df,
+  REML=T
+)
+```
+
+#### Inspect model
+```{r}
+summary(mod_full)
+```
+
+```{r}
+anova(mod_full)
+```
+
+#### Plot effects
+```{r}
+plot(mod_full)
+```
+
