@@ -69,6 +69,7 @@ plotdat <- plot.gam(mod_roi,
                     shade=TRUE,
                     shift=fixef(mod_roi)["(Intercept)"],
                     residuals=FALSE,
+                    seWithMean=TRUE,
                     xlim=c(0.95, 4),
                     ylim=c(-0.4, 0.4),
                     # xlab="Tau-SUVR at time(t)",
@@ -76,7 +77,7 @@ plotdat <- plot.gam(mod_roi,
                     rug=FALSE) +
   abline(h = 0, lty = 1)
 
-plot.gam(mod_roi, pages=4)
+plot.gam(mod_roi, seWithMean=TRUE, pages=4)
 
 # ------------------------------------------------------------------------------
 # Delta tau ~ baseline tau * region
@@ -99,17 +100,26 @@ plot.gam(mod_roi, pages=4)
 # )
 mod_roi_alt <- gam(
   delta_suvr_from_baseline ~
-    s(years_from_baseline_pet, bs = "cs") +
+    # PARAMETRIC EFFECTS
+    # ------------------
+    # roi_full +
+
+    # SMOOTHS OF INTEREST
+    # -------------------
     s(baseline_suvr, bs = "cs") +
+    s(baseline_suvr, by=roi_full, bs = "cs") +
     # ti(years_from_baseline_pet, baseline_suvr, bs = "cs") +
     # te(years_from_baseline_pet, baseline_suvr, bs = "cs") +
     # s(years_from_baseline_pet, by = roi_full, bs = "cs", k = 6) +
     # s(baseline_suvr, by = roi_full, bs = "cs", k = 6) +
     # ti(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs", k=12) +
     # te(years_from_baseline_pet, baseline_suvr, by = roi_full, bs = "cs") +
-    s(years_from_baseline_pet, roi_full, bs = "fs") +
-    s(baseline_suvr, roi_full, bs = "fs") +
-    # s(roi_full, bs = "re") +
+
+    # NUISANCE VARIABLES
+    # ------------------
+    s(years_from_baseline_pet, bs = "cs") +
+    s(years_from_baseline_pet, by=roi_full, bs = "cs") +
+    s(roi_full, bs = "re") +
     s(subj, bs = "re"),
   data = tau_rois_long,
   REML = TRUE,
@@ -119,12 +129,39 @@ mod_roi_alt <- gam(
 summary(mod_roi_alt)
 gam.check(mod_roi_alt) + abline(0, 1, col="red")
 appraise(mod_roi_alt, method="simulate")
-plot.gam(mod_roi_alt, residuals=TRUE)
+
+smooths(mod_roi_alt)
+smooth_coefs(mod_roi_alt, term="s(baseline_suvr)")
+est_grand_icpt <- fixef(mod_roi_alt)
+est_roi_icpt <- smooth_estimates(mod_roi_alt, "s(roi_full)") %>% add_confint() %>% arrange(-est)
+est_baseline_suvr <- smooth_estimates(mod_roi_alt, "s(baseline_suvr)") %>% add_confint()
+est_years_from_baseline <- smooth_estimates(mod_roi_alt, "s(years_from_baseline_pet)") %>% add_confint()
+est_roi_x_baseline_suvr <- smooth_estimates(mod_roi_alt, "s(years_from_baseline_pet):roi_fullPrecuneus") %>% add_confint() %>% arrange(-est)
+
+plot.gam(mod_roi_alt,
+         residuals=TRUE,
+         seWithMean=TRUE,
+         shade=TRUE,
+         shift=fixef(mod_roi_alt)["(Intercept)"],
+         ylim=c(-0.5, 0.4),
+         select = 1)+
+  abline(h = 0, lty = 1)
+draw(mod_roi_alt,
+     scales="fixed",
+     residuals=TRUE,
+     shift=fixef(mod_roi_alt)["(Intercept)"],
+     # size=1,
+     # coverage=1,
+     overall_uncertainty=TRUE,
+     select=1) +
+  ylim(-0.6, 0.6)
+draw()
 plotdat <- plot.gam(mod_roi_alt,
                     select=2,
                     shade=TRUE,
-                    shift=fixef(mod_roi_alt)["(Intercept)"],
+                    #shift=fixef(mod_roi_alt)["(Intercept)"],
                     residuals=TRUE,
+                    seWithMean=TRUE,
                     # xlim=c(0.95, 4),
                     ylim=c(-0.4, 0.4),
                     # xlab="Tau-SUVR at time(t)",
@@ -132,55 +169,11 @@ plotdat <- plot.gam(mod_roi_alt,
                     rug=FALSE) +
   abline(h = 0, lty = 1)
 
-
-mod_roi_apoe <- gam(
-  delta_suvr_from_baseline ~
-    # PARAMETRIC COEFS
-    # ----------------
-    # apoe4_allelesf +
-    # apoe2_allelesf +
-    #
-    # SMOOTHS OF INTEREST
-    # -------------------
-    s(baseline_suvr, bs = "cs") +
-
-    s(baseline_suvr, roi_full, bs = "fs") +
-
-    # s(baseline_suvr, by = apoe4_allelesf, bs = "cs") +
-    # s(baseline_suvr, by = apoe2_allelesf, bs = "cs") +
-    s(baseline_suvr, apoe4_allelesf, bs = "fs") +
-    # s(baseline_suvr, apoe2_allelesf, bs = "fs") +
-
-    s(fbb_centiloids_baseline, bs = "cs") +
-    ti(baseline_suvr, fbb_centiloids_baseline, bs = "cs") +
-
-    s(baseline_suvr, sex, bs = "fs") +
-
-    # s(baseline_suvr, minority, bs = "fs") +
-
-    s(age_at_baseline, bs = "cs") +
-    ti(baseline_suvr, age_at_baseline, bs = "cs") +
-
-    s(cdrsob_baseline, bs = "cs") +
-    ti(baseline_suvr, cdrsob_baseline, bs = "cs") +
-    #
-    # NUISANCE VARIABLES
-    # ------------------
-    # s(roi_full, bs = "re") +
-    s(years_from_baseline_pet, bs = "cs") +
-    s(years_from_baseline_pet, roi_full, bs = "fs") +
-    s(subj, bs = "re"),
-  data = tau_rois_long,
-  REML = TRUE,
-  family = gaussian,
-  select = TRUE
-)
-summary(mod_roi_apoe)
-plot.gam(mod_roi_apoe, residuals=TRUE)
-
 # ------------------------------------------------------------------------------
 mod_roi2 <- gam(delta_suvr_peryear ~
-                  s(last_suvr, roi_full, bs="fs"),
+                roi_full +
+                s(last_suvr, bs="cs") +
+                s(last_suvr, by=roi_full, bs="cs"),
                   # s(subj, bs="re"),
                data=tau_rois_long,
                na.action="na.omit",
@@ -195,6 +188,7 @@ plotdat <- plot.gam(mod_roi2,
                     shade=TRUE,
                     shift=fixef(mod_roi2)["(Intercept)"],
                     residuals=FALSE,
+                    seWithMean=TRUE,
                     # xlim=c(0.95, 4),
                     # ylim=c(-0.4, 0.4),
                     # xlab="Tau-SUVR at time(t)",
@@ -202,7 +196,7 @@ plotdat <- plot.gam(mod_roi2,
                     rug=FALSE) +
   abline(h = 0, lty = 1)
 
-plot.gam(mod_roi2)
+plot.gam(mod_roi2, seWithMean=TRUE)
 
 fv <- fitted_values(mod_roi2, data=tau_rois_long)
 fv |>
@@ -237,7 +231,7 @@ mod_cdr <- gam(
 )
 summary(mod_cdr)
 gam.check(mod_cdr)
-plot.gam(mod_cdr, pages=4)
+plot.gam(mod_cdr, seWithMean=TRUE, pages=4)
 plotdata <- plot.gam(mod_cdr,
                      select=1,
                      shade=TRUE,
@@ -247,7 +241,7 @@ plotdata <- plot.gam(mod_cdr,
                      ylab="ΔSUVR/year",
                      shift=fixef(mod_roi_full)["(Intercept)"],
                      residuals=TRUE,
-                     seWithMean=FALSE)
+                     seWithMean=TRUE)
 
 
 mod_cdr_base <- gam(
@@ -264,7 +258,7 @@ mod_cdr_base <- gam(
 )
 summary(mod_cdr_base)
 gam.check(mod_cdr_base)
-plot.gam(mod_cdr_base, pages=4)
+plot.gam(mod_cdr_base, seWithMean=TRUE, pages=4)
 plotdata <- plot.gam(mod_cdr_base,
                      select=1,
                      shade=TRUE,
@@ -274,7 +268,7 @@ plotdata <- plot.gam(mod_cdr_base,
                      ylab="ΔSUVR/year",
                      shift=fixef(mod_roi_full)["(Intercept)"],
                      residuals=TRUE,
-                     seWithMean=FALSE)
+                     seWithMean=TRUE)
 
 # ------------------------------------------------------------------------------
 keep_cols <- c("delta_suvr_peryear", "roi_full", "last_suvr",
@@ -293,7 +287,7 @@ mod_apoe <- gam(
 )
 summary(mod_apoe)
 gam.check(mod_apoe)
-plot.gam(mod_apoe, pages=4)
+plot.gam(mod_apoe, seWithMean=TRUE, pages=4)
 plotdata <- plot.gam(mod_apoe,
                      select=1,
                      shade=TRUE,
@@ -303,7 +297,7 @@ plotdata <- plot.gam(mod_apoe,
                      ylab="ΔSUVR/year",
                      shift=fixef(mod_roi_full)["(Intercept)"],
                      residuals=TRUE,
-                     seWithMean=FALSE)
+                     seWithMean=TRUE)
 
 # ------------------------------------------------------------------------------
 keep_cols <- c("delta_suvr_peryear", "roi_full", "last_suvr",
@@ -323,12 +317,13 @@ mod_ageatpet <- gam(
 )
 summary(mod_ageatpet)
 gam.check(mod_ageatpet)
-plot.gam(mod_ageatpet, pages=4)
+plot.gam(mod_ageatpet, seWithMean=TRUE, pages=4)
 plotdat <- plot.gam(mod_ageatpet,
                     select=31, #1, 2, 23, 31
                     shade=TRUE,
                     shift=fixef(mod_ageatpet)["(Intercept)"],
                     residuals=TRUE,
+                    seWithMean=TRUE,
                     # xlim=c(0.95, 4),
                     ylim=c(-0.5, 0.5),
                     # xlab="Tau-SUVR at time(t)",
@@ -349,7 +344,7 @@ mod0 <- gamm4(value ~ roi +
               data=tau_rois_eoad[((tau_rois_eoad$cdrsob_baseline >= 0)),],
               REML=TRUE, family=gaussian)
 summary(mod0$gam)
-plot.gam(mod0$gam)
+plot.gam(mod0$gam, seWithMean=TRUE)
 mod1 <- gam(value ~ roi +
                     s(years_from_baseline_pet, by=roi, bs="gp") +
                     s(subj, bs="re"),
@@ -379,4 +374,38 @@ mod_all <- gam(delta_suvr_peryear ~
                family=gaussian)
 summary(mod_all)
 gam.check(mod_all)
-plot.gam(mod_all, pages=1)
+plot.gam(mod_all, seWithMean=TRUE, pages=1)
+
+mod_full <- gam(
+  delta_suvr_from_baseline ~
+    # PARAMETRIC COEFS
+    # ----------------
+
+  # SMOOTHS OF INTEREST
+  # -------------------
+  s(baseline_suvr, bs = "cs") +
+    s(baseline_suvr, roi_full, bs = "fs") +
+    s(age_at_baseline, bs = "cs") +
+    ti(baseline_suvr, age_at_baseline, bs = "cs") +
+    s(baseline_suvr, sex, bs = "fs") +
+    s(cdrsob_baseline, bs = "cs") +
+    ti(baseline_suvr, cdrsob_baseline, bs = "cs") +
+    s(baseline_suvr, apoe4_allelesf, bs = "fs") +
+    s(fbb_centiloids_baseline, bs = "cs") +
+    ti(baseline_suvr, fbb_centiloids_baseline, bs = "cs") +
+
+    # NUISANCE VARIABLES
+    # ------------------
+  # s(roi_full, bs = "re") +
+  s(years_from_baseline_pet, bs = "cs") +
+    s(years_from_baseline_pet, roi_full, bs = "fs") +
+    s(subj, bs = "re"),
+
+  data = tau_rois_long,
+  REML = TRUE,
+  family = gaussian,
+  select = TRUE
+)
+summary(mod_full)
+plot.gam(mod_full, seWithMean=TRUE, residuals=TRUE)
+draw(mod_full, scales = "fixed", overall_uncertainty = TRUE)

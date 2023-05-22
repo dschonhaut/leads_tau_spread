@@ -1,0 +1,377 @@
+---
+title: "Longitudinal tau-PET in LEADS: GAMs"
+output: html_notebook
+---
+
+# Setup
+
+##### Load packages
+```{r}
+library(tidyverse)
+library(mgcv)
+library(gratia)
+```
+
+##### Load the data.
+```{r}
+data_dir <- "/Users/dschonhaut/Box/projects/leads_tau_spread/data/ssheets"
+tau <- read.csv(file.path(data_dir, "tau-eoad-re_2023-05-16.csv"))
+```
+
+##### Convert selected columns to factors.
+```{r}
+tau <- as.data.frame(unclass(tau), stringsAsFactors = TRUE)
+tau$apoe4_alleles <- factor(tau$apoe4_alleles, ordered = TRUE)
+subjs <- levels(tau$subj)
+rois <- levels(tau$roi)
+```
+
+##### Define plotting variables.
+```{r}
+blue3 <- "#141F52"
+blue2 <- "#2E45B8"
+blue1 <- "#D6DBF5"
+red3 <- "#861320"
+red2 <- "#E3120B"
+red1 <- "#FFA39F"
+cyan3 <- "#005F73"
+cyan2 <- "#3EBCD2"
+cyan1 <- "#6FE4FB"
+green3 <- "#0E6452"
+green2 <- "#1DC9A4"
+green1 <- "#D2F9F0"
+orange2 <- "#F97A1F"
+orange1 <- "#FCB583"
+yellow2 <- "#F9C31F"
+yellow1 <- "#FCDE83"
+black <- "#000000"
+gray5 <- "#333333"
+gray4 <- "#595959"
+gray3 <- "#B3B3B3"
+gray2 <- "#D9D9D9"
+white <- "#FFFFFF"
+colors <- c(blue2, red2, cyan2, orange2, yellow2, green2)
+blues <- c(blue1, blue2, blue3)
+reds <- c(red1, red2, red3)
+```
+
+# Model specification
+
+## Format dataframe
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "apoe4_alleles", "sex", "suvr_bl_re",
+                "age_at_ftp_bl", "fbb_cl_bl", "cdr_sb_bl", "chg_yr_re")
+df <- df[complete.cases(df[,check_cols]),]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+
+# # Convert selected columns to deviation coding
+# contrasts(df$sex) <- 'contr.sum'
+# contrasts(df$roi) <- 'contr.sum'
+# contrasts(df$apoe4_alleles) <- 'contr.sum'
+```
+
+## Full models
+
+#### Long: Full LME + BL
+```{r}
+mod_long_full_lin_addbl <- bam(
+  chg_yr_re ~
+    # Discrete main effects
+    roi +
+    apoe4_alleles +
+    sex +
+    # Continuous main effects
+    suvr_bl_re +
+    age_at_ftp_bl +
+    fbb_cl_bl +
+    cdr_sb_bl +
+    # Factor-factor interactions
+    apoe4_alleles:roi +
+    sex:roi +
+    # Factor-continuous interactions
+    suvr_bl_re:roi +
+    age_at_ftp_bl:roi +
+    fbb_cl_bl:roi +
+    cdr_sb_bl:roi +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+)
+```
+
+##### Inspect model
+```{r}
+appraise(mod_long_full_lin_addbl, method="simulate")
+```
+
+```{r}
+summary(mod_long_full_lin_addbl)
+```
+
+#### Long: Full GAM + BL
+```{r}
+mod_long_full_gam_addbl <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    roi +
+    apoe4_alleles +
+    sex +
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-factor interactions
+    apoe4_alleles:roi +
+    sex:roi +
+    # Factor-smooth interactions
+    s(suvr_bl_re, by=roi, m=1, bs="tp") +
+    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
+    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
+    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+)
+```
+
+##### Inspect model
+```{r}
+gam.check(mod_long_full_gam_addbl)
+```
+
+```{r}
+appraise(mod_long_full_gam_addbl, method="simulate")
+```
+
+```{r}
+summary(mod_long_full_gam_addbl)
+```
+
+```{r}
+overview(mod_long_full_gam_addbl, stars=T)
+```
+
+##### Plot smooths
+```{r}
+draw(mod_long_full_gam_addbl,
+     scales="free",
+     overall_uncertainty=T,
+     residuals=F,
+     select=1
+     )
+```
+
+##### Compare models
+```{r}
+AIC(mod_long_full_gam_addbl, mod_long_full_lin_addbl)
+```
+
+```{r}
+anova(mod_long_full_gam_addbl, mod_long_full_lin_addbl, test="F")
+```
+
+#### Long: Full GAM
+```{r}
+mod_long_full_gam <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    roi +
+    apoe4_alleles +
+    sex +
+    # Smooth main effects
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-factor interactions
+    apoe4_alleles:roi +
+    sex:roi +
+    # Factor-smooth interactions
+    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
+    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
+    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+)
+
+mod_long_full_gam_re <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    s(roi, bs="re") +
+    s(apoe4_alleles, bs="re") +
+    s(sex, bs="re") +
+    # Smooth main effects
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-factor interactions
+    s(apoe4_alleles, by=roi, bs="re", m=1) +
+    s(sex, by=roi, bs="re", m=1) +
+    # Factor-smooth interactions
+    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
+    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
+    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+)
+```
+
+##### Inspect model
+```{r}
+gam.check(mod_long_full_gam)
+```
+
+```{r}
+appraise(mod_long_full_gam, method="simulate")
+```
+
+```{r}
+summary(mod_long_full_gam)
+```
+
+```{r}
+overview(mod_long_full_gam, stars=T)
+```
+
+```{r}
+overview(mod_long_full_gam_re, stars=T)
+```
+
+##### Plot smooths
+```{r}
+plot(mod_long_full_gam,
+     residuals=F,
+     scale=0,
+     all.terms=T,
+     shade=T,
+     seWithMean=T,
+     unconditional=T,
+     scheme=2,
+     pages=10
+     )
+```
+
+```{r}
+draw(mod_long_full_gam,
+     scales="free",
+     overall_uncertainty=T,
+     residuals=F,
+     select=1
+     )
+```
+
+```{r}
+draw(mod_long_full_gam_re,
+     scales="free",
+     overall_uncertainty=T,
+     residuals=F,
+     select=10
+     )
+```
+
+##### Compare models
+
+```{r}
+AIC(mod_long_full_gam, mod_long_full_gam_re)
+```
+
+```{r}
+anova(mod_long_full_gam, mod_long_full_gam_re, test="F")
+```
+
+#### BL: Full GAM
+```{r}
+mod_bl_full_gam <- bam(
+  suvr_bl_re ~
+    # Linear main effects
+    roi +
+    apoe4_alleles +
+    sex +
+    # Smooth main effects
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-factor interactions
+    apoe4_alleles:roi +
+    sex:roi +
+    # Factor-smooth interactions
+    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
+    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
+    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+  # select=TRUE
+)
+```
+
+##### Inspect model
+```{r}
+gam.check(mod_bl_full_gam)
+```
+
+```{r}
+appraise(mod_bl_full_gam, method="simulate")
+```
+
+```{r}
+summary(mod_bl_full_gam)
+```
+
+```{r}
+overview(mod_bl_full_gam, stars=T)
+```
+
+##### Plot smooths
+```{r}
+draw(mod_bl_full_gam,
+     scales="free",
+     overall_uncertainty=T,
+     residuals=F,
+     select=1
+     )
+```
+
+## Main effect models
+
+#### Full GAM - BL SUVR
+```{r}
+mod_long_full_gam <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    roi +
+    apoe4_alleles +
+    sex +
+    # Smooth main effects
+    # s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-factor interactions
+    apoe4_alleles:roi +
+    sex:roi +
+    # Factor-smooth interactions
+    # s(suvr_bl_re, by=roi, m=1, bs="tp") +
+    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
+    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
+    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian
+  # method="ML",
+  # select=TRUE
+)
+```
+
