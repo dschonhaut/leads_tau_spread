@@ -31,7 +31,13 @@ rois <- levels(as.factor(tau_eoad_long$roi))
 # ------------------------------------------------------------------------------
 # Create an empty dataframe to store the results
 df <- tau_eoad_long
-df <- df[(df$ftp_visits>1),]
+df <- df %>%
+  filter(
+    dx == "EOAD",
+    ftp_visits > 1,
+    apoe4_alleles >= 0,
+    cdr_sb_bl >= 0
+  )
 df$subjroi <- factor(paste(df$subj, df$roi, sep = '_'))
 results <- data.frame(subjroi = character(),
                       parc = character(),
@@ -62,12 +68,103 @@ for (atlas in unique_parc) {
                                        slope = slope,
                                        stringsAsFactors = F))
 }
-# Save the output.
-write.csv(results,
-          file.path(data_dir, "tau-rois-agg_eoad-subj-random-slopes-icpts_gt1visit_2023-05-14.csv"),
-          row.names=F)
-# ------------------------------------------------------------------------------
 
+results <- results %>%
+  extract(col = subjroi,
+          into = c("subj", "roi"),
+          regex = "(.*)_([^_]+)$",
+          remove = FALSE
+  )
+
+# stats...
+df1 <- df %>%
+  filter(
+    dx == "EOAD",
+    ftp_visits > 1,
+    apoe4_alleles >= 0,
+    cdr_sb_bl >= 0,
+    visit == 1
+  ) %>%
+  group_by(parc, roi) %>%
+  summarize(
+    mean_suvr_bl = mean(suvr),
+    sd_suvr_bl = sd(suvr)
+  )
+df2 <- df %>%
+  filter(
+    dx == "EOAD",
+    ftp_visits > 1,
+    apoe4_alleles >= 0,
+    cdr_sb_bl >= 0,
+    visit > 1
+  ) %>%
+  group_by(parc, roi) %>%
+  summarize(
+    mean_chg_suvr_yr = mean(chg_suvr / ftp_yrs_from_bl),
+    sd_chg_suvr_yr = sd(chg_suvr / ftp_yrs_from_bl)
+  )
+df1 %>%
+  inner_join(
+    df2,
+    by = c("parc", "roi")
+  )
+
+results %>%
+  group_by(roi) %>%
+  summarize(
+    count = n(),
+    subj = length(unique(subj)),
+    mean_icpt = mean(icpt),
+    sd_icpt = sd(icpt),
+    mean_slope = mean(slope),
+    sd_slope = sd(slope)
+  )
+
+# # Save the output.
+# write.csv(results,
+#           file.path(data_dir, "tau-rois-agg_eoad-subj-random-slopes-icpts_gt1visit_2023-05-14.csv"),
+#           row.names=F)
+
+# ------------------------------------------------------------------------------
+# Fit mixed effects model
+# ------------------------------------------------------------------------------
+# Create an empty dataframe to store the results
+df <- tau_eoad_long
+df <- df[(df$ftp_visits>1),]
+df$subjroi <- factor(paste(df$subj, df$roi, sep = '_'))
+results <- data.frame(subjroi = character(),
+                      parc = character(),
+                      icpt = numeric(),
+                      slope = numeric(),
+                      stringsAsFactors = FALSE)
+
+# Loop over unique values of df$parc
+unique_parc <- unique(df$parc)
+for (atlas in unique_parc) {
+  # Subset the dataframe for the current parc
+  df_ <- df[df$parc == atlas, ]
+
+  # Fit the mixed effects model
+  mem <- lmer(suvr ~ roi  + (1|subj) + (0 + ftp_yrs_from_bl|subj) + (1|subjroi) + (0 + ), df_, REML = TRUE)
+
+  # Extract the random effects of the fitted model
+  random_effects <- ranef(mem)$subjroi
+
+  # Extract the intercept and slope from the random effects
+  icpt <- random_effects[[1]]
+  slope <- random_effects[[2]]
+
+  # Append the results to the output dataframe
+  results <- rbind(results, data.frame(subjroi = rownames(random_effects),
+                                       parc = atlas,
+                                       icpt = icpt,
+                                       slope = slope,
+                                       stringsAsFactors = F))
+}
+# # Save the output.
+# write.csv(results,
+#           file.path(data_dir, "tau-rois-agg_eoad-subj-random-slopes-icpts_gt1visit_2023-05-14.csv"),
+#           row.names=F)
 
 
 

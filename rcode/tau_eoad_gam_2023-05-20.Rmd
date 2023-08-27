@@ -10,12 +10,17 @@ output: html_notebook
 library(tidyverse)
 library(mgcv)
 library(gratia)
+library(car)
+library(effects)
+library(emmeans)
+library(lattice)
+library(PerformanceAnalytics)
 ```
 
 ##### Load the data.
 ```{r}
 data_dir <- "/Users/dschonhaut/Box/projects/leads_tau_spread/data/ssheets"
-tau <- read.csv(file.path(data_dir, "tau-eoad-re_2023-05-16.csv"))
+tau<- read.csv(file.path(data_dir, "tau-eoad-re_2023-05-16.csv"))
 ```
 
 ##### Convert selected columns to factors.
@@ -28,92 +33,4515 @@ rois <- levels(tau$roi)
 
 ##### Define plotting variables.
 ```{r}
-blue3 <- "#141F52"
-blue2 <- "#2E45B8"
 blue1 <- "#D6DBF5"
-red3 <- "#861320"
-red2 <- "#E3120B"
-red1 <- "#FFA39F"
-cyan3 <- "#005F73"
-cyan2 <- "#3EBCD2"
+blue2 <- "#2E45B8"
+blue3 <- "#141F52"
 cyan1 <- "#6FE4FB"
-green3 <- "#0E6452"
-green2 <- "#1DC9A4"
+cyan2 <- "#3EBCD2"
+cyan3 <- "#005F73"
 green1 <- "#D2F9F0"
-orange2 <- "#F97A1F"
-orange1 <- "#FCB583"
-yellow2 <- "#F9C31F"
+green2 <- "#1DC9A4"
+green3 <- "#0E6452"
 yellow1 <- "#FCDE83"
-black <- "#000000"
-gray5 <- "#333333"
-gray4 <- "#595959"
-gray3 <- "#B3B3B3"
-gray2 <- "#D9D9D9"
+yellow2 <- "#F9C31F"
+yellow3 <- "#CFA300"
+beige1 <- "#EDE3D5"
+beige2 <- "#D4C6B6"
+beige3 <- "#BDAF97"
+orange1 <- "#FCB583"
+orange2 <- "#F97A1F"
+orange3 <- "#C75400"
+red1 <- "#FFA39F"
+red2 <- "#E3120B"
+red3 <- "#861320"
+pink1 <- "#FFA4C2"
+pink2 <- "#FF4983"
+pink3 <- "#A80055"
+violet1 <- "#E6D4FA"
+violet2 <- "#B38FE7"
+violet3 <- "#7D55C7"
 white <- "#FFFFFF"
-colors <- c(blue2, red2, cyan2, orange2, yellow2, green2)
+gray1 <- "#F2F2F2"
+gray2 <- "#D9D9D9"
+gray3 <- "#B3B3B3"
+gray4 <- "#595959"
+gray5 <- "#333333"
+gray6 <- "#1A1A1A"
+black <- "#000000"
+
+# Define color palettes.
+pal24 <- c(blue2, orange2, cyan2, pink2, green2, violet2, yellow2, red2,
+           blue3, orange3, cyan3, pink3, green3, violet3, yellow3, red3,
+           blue1, orange1, cyan1, pink1, green1, violet1, yellow1, red1
+           )
+pal24s <- c(blue1, blue2, blue3, cyan1, cyan2, cyan2,
+            green1, green2, green3, yellow1, yellow2, yellow3,
+            orange1, orange2, orange3, red1, red2, red3,
+            pink1, pink2, pink3, violet1, violet2, violet3
+            )
+pal_gs <- c(white, gray1, gray2, gray3, gray4, gray5, gray6, black)
+colors <- c(blue2, pink2, cyan2, orange2, yellow2, green2)
 blues <- c(blue1, blue2, blue3)
 reds <- c(red1, red2, red3)
 ```
 
-# Model specification
+# Predictor associations
 
-## Format dataframe
+#### Define functions
+```{r}
+panel.cor <- function(x, y, digits=1, prefix="", cex.cor)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r1=cor(x,y,use="pairwise.complete.obs")
+    r <- abs(cor(x, y,use="pairwise.complete.obs"))
+
+    txt <- format(c(r1, 0.123456789), digits=digits)[1]
+    txt <- paste(prefix, txt, sep="")
+    if(missing(cex.cor)) cex <- 0.9/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex * r)
+}
+
+panel.smooth2=function (x, y, col = par("col"), bg = NA, pch = par("pch"),
+    cex = 1, col.smooth = "red", span = 2/3, iter = 3, ...)
+{
+    points(x, y, pch = pch, col = col, bg = bg, cex = cex)
+    ok <- is.finite(x) & is.finite(y)
+    if (any(ok))
+        lines(stats::lowess(x[ok], y[ok], f = span, iter = iter),
+            col = 1, ...)
+}
+
+panel.lines2=function (x, y, col = par("col"), bg = NA, pch = par("pch"),
+    cex = 1, ...)
+{
+    points(x, y, pch = pch, col = col, bg = bg, cex = cex)
+    ok <- is.finite(x) & is.finite(y)
+    if (any(ok)){
+        tmp=lm(y[ok]~x[ok])
+        abline(tmp)}
+
+}
+
+panel.hist <- function(x, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5) )
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks; nB <- length(breaks)
+    y <- h$counts; y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y, col="white", ...)
+}
+```
+
+```{r}
+# Define groups of regions to plot
+roi_map <- list(
+  "global" = list(
+    "title" = "Global",
+    "rois" = c("all"),
+    "labels" = c("Global")
+    ),
+  "mtl" = list(
+    "title" = "MTL",
+    "rois" = c("all", "amy", "erc", "phg"),
+    "labels" = c("Global", "Amygdala", "Entorhinal", "PHG")
+    ),
+  "temporal" = list(
+    "title" = "Temporal",
+    "rois" = c("all", "fsf", "itg", "mtg", "stg", "tp"),
+    "labels" = c("Global", "Fusiform", "ITG", "MTG", "STG", "Temp. Pole")
+    ),
+  "parietal" = list(
+    "title" = "Parietal",
+    "rois" = c("all", "pcc", "prcu", "smg", "ipc", "spc", "ssm"),
+    "labels" = c("Global", "PCC", "Precuneus", "Supramarginal", "IPC", "SPC",
+                 "Sensorimotor")
+    ),
+  "occipital" = list(
+    "title" = "Occipital",
+    "rois" = c("all", "ling", "locc", "cun", "v1"),
+    "labels" = c("Global", "Lingual", "Lat. Occipital", "Cuneus", "Prim. Visual")
+    ),
+  "frontal" = list(
+    "title" = "Frontal",
+    "rois" = c("all", "sfg", "mfg", "ifg", "acc", "ofc", "ins"),
+    "labels" = c("Global", "SFG", "MFG", "IFG", "ACC", "OFC", "Insula")
+    ),
+  "all" = list(
+    "title" = "All regions",
+    "rois" = c("all", "amy", "erc", "phg",
+               "fsf", "itg", "mtg", "stg", "tp",
+               "pcc", "prcu", "smg", "ipc", "spc", "ssm",
+               "ling", "locc", "cun", "v1",
+               "sfg", "mfg", "ifg", "acc", "ofc", "ins"),
+    "labels" = c("Global", "Amygdala", "Entorhinal", "PHG",
+                 "Fusiform", "ITG", "MTG", "STG", "Temp. Pole",
+                 "PCC", "Precuneus", "Supramarginal", "IPC", "SPC", "Sensorimotor",
+                 "Lingual", "Lat. Occipital", "Cuneus", "Prim. Visual",
+                 "SFG", "MFG", "IFG", "ACC", "OFC", "Insula")
+    ),
+  "meta_temporal" = list(
+    "title" = "Meta Temporal ROI",
+    "rois" = c("all", "amy", "erc", "phg", "fsf", "itg", "mtg"),
+    "labels" = c("Global", "Amygdala", "Entorhinal", "PHG",
+                 "Fusiform", "ITG", "MTG")
+    ),
+  "sig" = list(
+    "title" = "Differs from global",
+    "rois" = c("all", "amy", "erc", "phg", "tp",
+               "pcc", "prcu", "ipc", "locc", "cun",
+               "ifg", "ins"),
+    "labels" = c("Global", "Amygdala", "Entorhinal", "PHG", "Temp. Pole",
+                 "PCC", "Precuneus", "IPC", "Lat. Occipital", "Cuneus",
+                 "IFG", "Insula")
+    ))
+```
+
+
+#### Select data
 ```{r}
 # Copy the main dataframe.
 df <- data.frame(tau)
 
 # Remove rows with NA in any of the columns defined below.
-check_cols <- c("subj", "roi", "apoe4_alleles", "sex", "suvr_bl_re",
-                "age_at_ftp_bl", "fbb_cl_bl", "cdr_sb_bl", "chg_yr_re")
-df <- df[complete.cases(df[,check_cols]),]
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "age_at_ftp_bl", "sex", "fbb_cl_bl",
+                "apoe4_alleles", "cdr_sb_bl"
+                )
+df <- df[complete.cases(df[,check_cols]), check_cols]
 df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
-
-# # Convert selected columns to deviation coding
-# contrasts(df$sex) <- 'contr.sum'
-# contrasts(df$roi) <- 'contr.sum'
-# contrasts(df$apoe4_alleles) <- 'contr.sum'
+contrasts(df$roi) <- 'contr.sum'
 ```
 
-## Full models
-
-#### Long: Full LME + BL
+#### Describe associations
 ```{r}
-mod_long_full_lin_addbl <- bam(
-  chg_yr_re ~
-    # Discrete main effects
+test_factors <- c("roi", "sex", "apoe4_alleles")
+test_numeric <- c("suvr_bl_re", "age_at_ftp_bl", "fbb_cl_bl", "cdr_sb_bl")
+
+# Test associations
+# -----------------
+# Numeric-to-numeric: Pearson correlation
+
+# Factor-to-factor: Chi-square test of independence
+tbl = matrix(data=c(55, 45, 20, 30), nrow=2, ncol=2, byrow=T)
+dimnames(tbl) = list(City=c('B', 'T'), Gender=c('M', 'F'))
+
+chi2 = chisq.test(tbl, correct=F)
+c(chi2$statistic, chi2$p.value)
+
+# Factor-to-numeric: One-way ANOVA
+lmod_bl_full_pen <- lmer(suvr_bl_re ~ 
+               roi +
+               sex +
+               apoe4_alleles +
+               age_at_ftp_bl +
+               fbb_cl_bl +
+               cdr_sb_bl +
+               roi:sex +
+               roi:apoe4_alleles +
+               roi:age_at_ftp_bl +
+               roi:fbb_cl_bl +
+               roi:cdr_sb_bl +
+               (1|subj),
+             data = df, REML = FALSE)
+step(mod0) # performs backward elimination
+
+# Do backward elimination by hand
+anova(mod0)
+mod0.1 <- lmer(suvr_bl_re ~ 
+               roi +
+               sex +
+               apoe4_alleles +
+               age_at_ftp_bl +
+               fbb_cl_bl +
+               cdr_sb_bl +
+               # roi:sex +
+               roi:apoe4_alleles +
+               roi:age_at_ftp_bl +
+               roi:fbb_cl_bl +
+               roi:cdr_sb_bl +
+               (1|subj),
+             data = df, REML = FALSE)
+AIC(mod0)
+AIC(mod0.1)
+anova(mod0, mod0.1)
+mod1 <- lmer(suvr_bl_re ~ 
+               roi +
+               sex +
+               apoe4_alleles +
+               age_at_ftp_bl +
+               fbb_cl_bl +
+               cdr_sb_bl +
+               # roi:sex +
+               roi:apoe4_alleles +
+               roi:age_at_ftp_bl +
+               roi:fbb_cl_bl +
+               roi:cdr_sb_bl +
+               (1|subj),
+             data = df, REML = TRUE)
+anova(mod1)
+drop1(mod1)
+emmeans(mod1, "sex")
+emmeans(mod1, "roi")
+emmeans(mod1, "apoe4_alleles")
+emmeans(mod1, c("apoe4_alleles", "roi"))
+
+pairs(df[, c("apoe4_alleles", "age_at_ftp_bl", "fbb_cl_bl", "cdr_sb_bl",
+             "mmse_bl", "suvr_bl_re", "chg_yr_re")],
+      lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist)
+
+xyplot(suvr_bl_re ~ age_at_ftp_bl | roi, data = df, col = 1)
+dotplot(suvr_bl_re ~ apoe4_alleles | roi, data = df, col = 1)
+stripplot(suvr_bl_re ~ apoe4_alleles | roi, data = df, col = 1)
+bwplot(suvr_bl_re ~ apoe4_alleles | roi, data = df, col = 1)
+
+scatterplot(chg_yr_re ~ suvr_bl_re, data=df, smooth=FALSE, col=pal24)
+
+roi.apoe <- c("amy", "ifg", "itg", "mfg", "sfg", "smg")
+roi.cdr <- c("cun", "fsf", "ifg", "ipc", "itg", "ling", "locc", "mfg", "mtg",
+             "pcc", "prcu", "sfg", "smg", "spc")
+```
+
+#### Fit model
+```{r}
+mod_bl_full_0.0 <- bam(
+  suvr_bl_re ~
+    # Main effects
     roi +
-    apoe4_alleles +
     sex +
-    # Continuous main effects
-    suvr_bl_re +
-    age_at_ftp_bl +
-    fbb_cl_bl +
-    cdr_sb_bl +
-    # Factor-factor interactions
-    apoe4_alleles:roi +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
     sex:roi +
-    # Factor-continuous interactions
-    suvr_bl_re:roi +
-    age_at_ftp_bl:roi +
-    fbb_cl_bl:roi +
-    cdr_sb_bl:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
     # Random effects
     s(subj, bs="re"),
   data=df,
-  family=gaussian
+  family=gaussian(),
+  method="ML"
+)
+# drop the term with highest p>thresh until all p's are <thresh
+sum_mod_bl_full_0.0 <- summary(mod_bl_full_0.0) 
+aov_mod_bl_full_0.0 <- anova(mod_bl_full_0.0)
+```
+
+
+```{r}
+mod_bl_full_0.0 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.1 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.2 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    # apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.3 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    # s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.4 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    # s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.5 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    # s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+AIC(
+  mod_bl_full_0.0, # 1079.157 1081.559
+  mod_bl_full_0.1, # 1058.568* 1060.858*
+  mod_bl_full_0.2, # 1119.364 1121.487
+  mod_bl_full_0.3, # 1215.157 1216.988
+  mod_bl_full_0.4, # 1126.254 1127.706
+  mod_bl_full_0.5  # 1200.45 1201.898
+  )
+```
+
+```{r}
+mod_bl_full_0.1.1 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.1.2 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    # apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.1.3 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    # s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.1.4 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    # s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+mod_bl_full_0.1.5 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=1) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=2) +
+    # s(cdr_sb_bl, by=roi, bs="tp", m=1, id=3) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian(),
+  method="ML"
+)
+AIC(
+  mod_bl_full_0.1,   # 1058.568*
+  mod_bl_full_0.1.1, # 1058.640	
+  mod_bl_full_0.1.2, # 1101.561	
+  mod_bl_full_0.1.3, # 1191.964	
+  mod_bl_full_0.1.4, # 1110.609	
+  mod_bl_full_0.1.5  # 1183.433
+  )
+```
+
+```{r}
+mod_bl_full <- mod_bl_full_0.1
+sum_mod_bl_full <- summary(mod_bl_full)
+aov_mod_bl_full <- anova(mod_bl_full)
+ovv_mod_bl_full <- overview(mod_bl_full)
+```
+
+```{r}
+mod_bl_full_1.0 <- bam(
+  suvr_bl_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+AIC(mod_bl_full_0.1, mod_bl_full_1.0)
+```
+
+
+# Model specification
+
+## ROI-only models
+
+### Long ~ BL
+
+#### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+# check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re")
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "age_at_ftp_bl", "sex", "fbb_cl_bl",
+                "apoe4_alleles", "cdr_sb_bl"
+                )
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+contrasts(df$roi) <- 'contr.sum'
+```
+
+##### Fit model
+```{r}
+mod_long_bl <- bam(
+  chg_yr_re ~
+    roi +
+    s(suvr_bl_re, bs="tp") +
+    s(suvr_bl_re, by=roi, bs="tp", m=1, id=1) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  discrete = TRUE
+)
+
+mod_long_bl2 <- bam(
+  chg_yr_re ~
+    s(suvr_bl_re, bs="tp") +
+    s(suvr_bl_re, roi, bs="fs") +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_long_bl3 <- bam(
+  chg_yr_re ~
+    roi +
+    s(suvr_bl_re, bs = "tp") +
+    s(suvr_bl_re, by = roi, bs="tp", m = 1, id = 1) +
+    s(suvr_bl_re, by = subj, bs="fs", m = 1, id = 1),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  # nthreads = c(4, 1)
+  discrete = TRUE
+)
+
+mod_long_bl3.2 <- bam(
+  chg_yr_re ~
+    roi +
+    s(suvr_bl_re, bs="tp") +
+    s(suvr_bl_re, by=roi, bs="tp", m=1, id=1) +
+    s(subj, bs="re") +
+    s(suvr_bl_re, bs="fs"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_long_bl_lin <- bam(
+  chg_yr_re ~
+    suvr_bl_re +
+    roi +
+    suvr_bl_re:roi +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+# mod_long_bl <- bam(
+#   chg_yr_re ~
+#     s(roi, bs="re") +
+#     s(suvr_bl_re, bs="tp") +
+#     s(suvr_bl_re, by=roi, m=1, bs="tp") +
+#     s(subj, bs="re"),
+#   data=df,
+#   family=gaussian,
+#   select = TRUE
+# )
+```
+
+##### Compare models
+```{r}
+AIC(mod_long_bl_lin, mod_long_bl_fs)
+```
+```{r}
+# Test GAM vs. linear model using ML estimation
+smod <- bam(
+  chg_yr_re ~
+    s(suvr_bl_re, bs = "tp") +
+    s(suvr_bl_re, roi, bs = "fs") +
+    s(subj, bs="re"),
+  data = df,
+  family = gaussian,
+  method = "ML",
+  select = TRUE
+)
+lmod <- bam(
+  chg_yr_re ~
+    suvr_bl_re +
+    roi +
+    suvr_bl_re:roi +
+    s(subj, bs = "re"),
+  data=df,
+  family = gaussian,
+  method = "ML",
+  select = TRUE
+)
+AIC(smod, lmod)
+anova(smod, lmod, test = "F")
+```
+
+
+```{r}
+anova(mod_long_bl_lin, mod_long_bl_fs, test="F")
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_bl
+```
+
+```{r}
+sum_mod_long_bl <- summary(xmod)
+aov_mod_long_bl <- anova(xmod)
+# ovv_mod_long_bl <- overview(xmod)
+```
+
+```{r}
+alpha <- 0.05
+blroi <- as.data.frame(aov_mod_long_bl$s.table)
+blroi <- blroi[grepl("s\\(suvr_bl_re\\):roi", rownames(blroi)), ]
+blroi$p_fdr <- p.adjust(blroi[,"p-value"], method = "fdr")
+blroi$sig_fdr <- blroi$p_fdr < alpha
+```
+
+##### Predict values
+```{r}
+# Get global and ROI intercept predictions
+pred_icpt <- data.frame(roi = rois)
+preds_ <- predict.bam(xmod,
+            type = "response",
+            newdata = data.frame(roi = rois),
+            se.fit = TRUE,
+            # terms=c("(Intercept)", "s(roi)"),
+            terms = names(fixef(xmod)),
+            newdata.guaranteed = TRUE)
+pred_icpt$fit <- preds_$fit
+pred_icpt$se.fit <- preds_$se.fit
+
+preds_ <- predict.bam(xmod,
+                      type = "response",
+                      newdata = data.frame(roi = "all"),
+                      se.fit = TRUE,
+                      terms=c("(Intercept)"),
+                      newdata.guaranteed = TRUE)
+pred_icpt <- rbind(pred_icpt,
+                   data.frame(
+                     roi = "all",
+                     fit = preds_$fit,
+                     se.fit = preds_$se.fit))
+```
+
+```{r}
+# Get model estimates in each region, respectively
+xvals <- seq(0.9, 4.5, by = 0.01)
+pred_df <- data.frame(
+  roi = rep(rois, each = length(xvals)),
+  suvr_bl_re = rep(xvals, length(rois))
+  )
+preds <- predict.bam(xmod,
+                     type = "response",
+                     newdata = pred_df,
+                     se.fit = TRUE,
+                     exclude = "s(subj)",
+                     newdata.guaranteed = TRUE
+                     )
+pred_df$fit <- preds$fit
+pred_df$sem <- preds$se.fit
+
+# Get model estimates across regions (excluding region terms)
+pred_df_ <- data.frame(
+  roi = rep("all", length(xvals)),
+  suvr_bl_re = rep(xvals, 1)
+  )
+pred_df_ <- data.frame(
+  roi = rep(rois, each = length(xvals)),
+  suvr_bl_re = rep(xvals, length(rois))
+  )
+preds_ <- predict.bam(xmod,
+                      type = "response",
+                      newdata = pred_df_,
+                      se.fit = TRUE,
+                      terms = c("(Intercept)", "s(suvr_bl_re)"), # for GAM
+                      # terms = c("(Intercept)", "suvr_bl_re"), # for LMEM
+                      exclude = "s(subj)",
+                      newdata.guaranteed = TRUE
+                      )
+pred_df_$fit <- preds_$fit
+pred_df_$sem <- preds_$se.fit
+pred_df_ <- pred_df_ %>% filter(roi == rois[1]) %>% select(-roi)
+pred_df_ <- cbind(roi = rep("all", nrow(pred_df_)), pred_df_)
+
+# Concat
+pred_df <- rbind(pred_df_, pred_df)
+```
+
+
+```{r}
+# Calculate quantiles grouped by each ROI
+select_rois <- c("amy", "erc", "cun", "ifg", "pcc")
+
+# Subset the dataframe with selected ROIs
+subset_df <- df[df$roi %in% rois, ]
+
+# Drop unused levels of the "roi" factor
+subset_df <- data.frame(lapply(subset_df, function(x) if (is.factor(x)) droplevels(x) else x))
+
+# Calculate quantiles grouped by each ROI
+quantiles_by_roi <- tapply(subset_df$suvr_bl_re, subset_df$roi, quantile, c(0, 0.025, 0.05, 0.5, 0.95, 0.975, 1))
+
+# Print the quantiles for each ROI
+# print(quantiles_by_roi)
+```
+
+
+##### Plot smooths
+```{r}
+plot.gam(xmod,
+         select = 1,
+         rug = TRUE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(-0.2, 0.2),
+         scheme = 2,
+         #xlab = "Baseline FTP SUVR",
+         #ylab = "Predicted SUVR change/year",
+         #main = "Main effect: Baseline FTP"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+# resid_df <- data.frame(suvr_bl_re = df$suvr_bl_re,
+#                        roi = df$roi,
+#                        # resid = partial_residuals(xmod)[["s(suvr_bl_re)"]]
+#                        resid = partial_residuals(xmod)[["s(suvr_bl_re,roi)"]]
+#                        )
+# resid_df$resid = resid_df$resid + fixef(xmod)[["(Intercept)"]]
+
+# Setup plot data
+df_ = data.frame(df)
+df_min <- df_ %>%
+    group_by(subj) %>%
+    summarise(suvr_bl_re = min(suvr_bl_re),
+              chg_yr_re = min(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, suvr_bl_re, chg_yr_re)
+df_max <- df_ %>%
+    group_by(subj) %>%
+    summarise(suvr_bl_re = max(suvr_bl_re),
+              chg_yr_re = max(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, suvr_bl_re, chg_yr_re)
+df_ = rbind(df_min, df_max, df_)
+
+print(quantile(resid_df$suvr_bl_re, c(0, 0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975, 1.0)))
+print(quantile(resid_df$resid, c(0, 0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975, 1.0)))
+```
+```{r}
+# Group by 'roi' and calculate percentiles
+percentiles <- df %>%
+  group_by(roi) %>%
+  summarize(suvr_bl0 = quantile(suvr_bl_re, probs = 0),
+            suvr_bl2.5 = quantile(suvr_bl_re, probs = 0.025),
+            suvr_bl5 = quantile(suvr_bl_re, probs = 0.05),
+            suvr_bl95 = quantile(suvr_bl_re, probs = 0.95),
+            suvr_bl97.5 = quantile(suvr_bl_re, probs = 0.975),
+            suvr_bl100 = quantile(suvr_bl_re, probs = 1),
+            chg_yr_p0 = quantile(chg_yr_re, probs = 0),
+            chg_yr_p2.5 = quantile(chg_yr_re, probs = 0.025),
+            chg_yr_p5 = quantile(chg_yr_re, probs = 0.05),
+            chg_yr_p95 = quantile(chg_yr_re, probs = 0.95),
+            chg_yr_p97.5 = quantile(chg_yr_re, probs = 0.975),
+            chg_yr_p100 = quantile(chg_yr_re, probs = 1))
+
+# Convert the result to a dataframe
+percentiles_df <- as.data.frame(percentiles)
+
+# Calculate percentiles for all observations
+all_percentiles <- df %>%
+  summarize(suvr_bl0 = quantile(suvr_bl_re, probs = 0),
+            suvr_bl2.5 = quantile(suvr_bl_re, probs = 0.025),
+            suvr_bl5 = quantile(suvr_bl_re, probs = 0.05),
+            suvr_bl95 = quantile(suvr_bl_re, probs = 0.95),
+            suvr_bl97.5 = quantile(suvr_bl_re, probs = 0.975),
+            suvr_bl100 = quantile(suvr_bl_re, probs = 1),
+            chg_yr_p0 = quantile(chg_yr_re, probs = 0),
+            chg_yr_p2.5 = quantile(chg_yr_re, probs = 0.025),
+            chg_yr_p5 = quantile(chg_yr_re, probs = 0.05),
+            chg_yr_p95 = quantile(chg_yr_re, probs = 0.95),
+            chg_yr_p97.5 = quantile(chg_yr_re, probs = 0.975),
+            chg_yr_p100 = quantile(chg_yr_re, probs = 1)) %>%
+  mutate(roi = "all")
+
+# Append the row to the percentiles dataframe
+percentiles_df <- bind_rows(percentiles_df, all_percentiles)
+
+print(percentiles_df %>%
+        select(-roi) %>%
+        summarize(across(everything(), ~round(min(.), 3))))
+print(percentiles_df %>%
+        select(-roi) %>%
+        summarize(across(everything(), ~round(max(.), 3))))
+```
+
+
+```{r}
+roi <- "global"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) %>%
+  group_by(roi) %>%
+  mutate(qlow = quantile(df_$suvr_bl_re[df_$roi == roi], 0.025),
+         qhigh = quantile(df_$suvr_bl_re[df_$roi == roi], 0.975)) %>%
+  filter(suvr_bl_re >= qlow & suvr_bl_re <= qhigh) %>%
+  ungroup() %>%
+  select(-qlow, -qhigh)
+
+# Make plot
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    # data = resid_df, aes(x = suvr_bl_re, y = resid, color=roi),
+    data = df, aes(x = suvr_bl_re, y = chg_yr_re, color=roi),
+    size = 0.1, alpha = 0.67, color = gray3) +
+  geom_line(aes(x = suvr_bl_re, y = fit, color = roi), size = 1.2) +
+  geom_ribbon(aes(x = suvr_bl_re, y = fit, fill = roi,
+                  ymin = fit - sem, ymax = fit + sem),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(0.94, 3.88),
+    breaks=c(1, 1.5, 2, 2.5, 3, 3.5),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(-0.06, 0.12),
+    breaks=c(-0.06, -0.03, 0, 0.03, 0.06, 0.09, 0.12),
+    # limits = c(-0.1, 0.16),
+    # breaks=c(-0.1, -0.05, 0, 0.05, 0.1, 0.15),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "Baseline 18F-FTP SUVR",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+```{r}
+roi <- "frontal"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) %>%
+  group_by(roi) %>%
+  mutate(qlow = quantile(df_$suvr_bl_re[df_$roi == roi], 0.025),
+         qhigh = quantile(df_$suvr_bl_re[df_$roi == roi], 0.975)) %>%
+  filter(suvr_bl_re >= qlow & suvr_bl_re <= qhigh) %>%
+  ungroup() %>%
+  select(-qlow, -qhigh)
+
+# Make plot
+# ggplot(pred_df_sub,
+#        aes(x = suvr_bl_re, y = fit, color = roi)) +
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    # data = resid_df[resid_df$roi %in% select_rois, ],
+    # aes(x = suvr_bl_re, y = resid, color=roi),
+    data = df[df$roi %in% select_rois, ],
+    aes(x = suvr_bl_re, y = chg_yr_re, color=roi),
+    size = 0.1, alpha = 0.67) +
+  geom_line(aes(x = suvr_bl_re, y = fit, color = roi), size = 1.5) +
+  geom_ribbon(aes(x = suvr_bl_re, y = fit, color = roi,
+                  ymin = fit - sem, ymax = fit + sem, fill = roi),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(0.94, 3.88),
+    breaks=c(1, 1.5, 2, 2.5, 3, 3.5),
+    expand = c(0, 0)) +
+  scale_y_continuous(
+    # limits=c(-0.05, 0.1),
+    # breaks=c(-0.04, -0.02, 0, 0.02, 0.04, 0.06, 0.08, 0.1),
+    limits = c(-0.06, 0.12),
+    breaks=c(-0.06, -0.03, 0, 0.03, 0.06, 0.09, 0.12),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  labs(x = "Baseline 18F-FTP SUVR",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+## Main effect models
+
+### APOE4
+
+#### BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "apoe4_alleles", "age_at_ftp_bl", "fbb_cl_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+```{r}
+df_ <- data.frame(df)
+df_ <- df_[df_$roi=="amy", ]
+df_$apoe4_alleles <- as.integer(df_$apoe4_alleles)
+df_$age_at_ftp_bl = scale(df_$age_at_ftp_bl)
+df_$fbb_cl_bl = scale(df_$fbb_cl_bl)
+
+mod_ <- glm(apoe4_alleles ~
+              age_at_ftp_bl +
+              fbb_cl_bl,
+              # age_at_ftp_bl:fbb_cl_bl,
+            data = df_,
+            family = poisson(link = "log"))
+anova(mod_)
+summary(mod_)
+```
+
+
+##### Fit model
+```{r}
+mod_bl_apoe <- bam(
+  suvr_bl_re ~
+    apoe4_alleles +
+    # Smooth main effects
+    s(roi, bs="re") +
+    # Factor-smooth interactions
+    s(apoe4_alleles, by=roi, m=1, bs="re") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
 )
 ```
 
 ##### Inspect model
 ```{r}
-appraise(mod_long_full_lin_addbl, method="simulate")
+# Choose the model to inspect
+xmod <- mod_bl_age
 ```
 
 ```{r}
-summary(mod_long_full_lin_addbl)
+# sum_mod_bl_age <- summary(mod_bl_age)
+# aov_mod_bl_age <- anova(xmod)
+print(aov_mod_bl_age)
 ```
 
-#### Long: Full GAM + BL
+##### Plot model
+```{r}
+plot.gam(mod_bl_age,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(mod_long_age_bl)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(0, 0.1),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+#### Long + BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "apoe4_alleles", "age_at_ftp_bl", "fbb_cl_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_long_apoe_bl_ <- bam(
+  chg_yr_re ~
+    apoe4_alleles +
+    roi +
+    s(suvr_bl_re, bs="tp") +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by=roi, m=1) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_long_apoe_bl_lin <- bam(
+  chg_yr_re ~
+    apoe4_alleles +
+    s(suvr_bl_re, bs="tp") +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, roi, bs="fs") +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Compare models
+```{r}
+smod <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    # Factor-smooth interactions
+    te(apoe4_alleles, roi, bs="fs") +
+    s(suvr_bl_re, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+
+smod_ <- bam(
+  chg_yr_re ~
+    apoe4_alleles +
+    roi +
+    s(suvr_bl_re, bs="tp") +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by=roi, m=1) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+
+lmod <- bam(
+  chg_yr_re ~
+    apoe4_alleles +
+    s(suvr_bl_re, bs="tp") +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, roi, bs="fs") +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+```
+
+```{r}
+AIC(smod, lmod)
+```
+
+
+```{r}
+anova(smod, lmod, test = "F")
+```
+
+```{r}
+AIC(smod, smod_)
+```
+
+
+```{r}
+anova(smod, smod_, test = "F")
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_apoe_bl
+```
+
+```{r}
+# sum_mod_long_apoe_bl <- summary(xmod)
+aov_mod_long_apoe_bl <- anova(xmod)
+# ovv_mod_long_apoe_bl <- overview(xmod)
+# print(ovv_mod_long_age_bl)
+aov_mod_long_apoe_bl
+```
+
+```{r}
+smooths(xmod)
+smooth_coefs(xmod, "s(roi)")
+smooth_estimates(xmod, "s(roi)")
+```
+
+##### Plot model
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         # shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(-0.2, 0.2),
+         scheme = 2,
+         # xlab = "Baseline FTP SUVR",
+         # ylab = "Predicted SUVR change/year",
+         # main = "Main effect: Baseline FTP"
+         )
+# abline(0, 0, col=red2)
+```
+
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+### Sex
+
+#### BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "apoe4_alleles", "sex")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_bl_sex <- bam(
+  suvr_bl_re ~
+    sex +
+    # Smooth main effects
+    s(roi, bs="re") +
+    # Factor-smooth interactions
+    s(sex, by=roi, m=1, bs="re") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_bl_age
+```
+
+```{r}
+# sum_mod_bl_age <- summary(mod_bl_age)
+# aov_mod_bl_age <- anova(xmod)
+print(aov_mod_bl_age)
+```
+
+##### Plot model
+```{r}
+plot.gam(mod_bl_age,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(mod_long_age_bl)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(0, 0.1),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+#### Long + BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re", "fbb_cl_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_long_fbb_bl <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(age_at_ftp_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(age_at_ftp_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_age_bl_fs
+```
+
+```{r}
+sum_mod_long_age_bl <- summary(xmod)
+aov_mod_long_age_bl <- anova(xmod)
+ovv_mod_long_age_bl <- overview(xmod)
+# print(ovv_mod_long_age_bl)
+aov_mod_long_age_bl
+```
+
+```{r}
+smooths(mod_long_age_bl)
+smooth_coefs(mod_long_age_bl, "s(roi)")
+smooth_estimates(mod_long_age_bl, "s(roi)")
+```
+
+##### Compare models
+```{r}
+aov_res <- anova(mod_long_age_bl, mod_long_age_bl_noageroi, test = "F")
+print(aov_res)
+```
+
+```{r}
+aov_res <- anova(mod_long_age_bl_fs, mod_long_bl_fs, test = "F")
+print(aov_res)
+```
+
+```{r}
+AIC(mod_long_age_bl, mod_long_age_bl_fs)
+```
+
+```{r}
+anova(mod_long_age_bl, mod_long_age_bl_fs, test = "F")
+```
+
+##### Plot model
+```{r}
+# 2, 3, 52
+plot.gam(xmod,
+         select = 1,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(-0.2, 0.2),
+         scheme = 2,
+         xlab = "Baseline FTP SUVR",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Baseline FTP"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+### Age
+
+#### BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "age_at_ftp_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_bl_age <- bam(
+  suvr_bl_re ~
+    # Smooth main effects
+    s(age_at_ftp_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(age_at_ftp_bl, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_bl_age
+```
+
+```{r}
+# sum_mod_bl_age <- summary(mod_bl_age)
+aov_mod_bl_age <- anova(xmod)
+aov_mod_bl_age
+```
+
+##### Plot model
+```{r}
+plot.gam(xmod,
+         select = 1,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(0, 0.1),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "18F-FTP SUVR at baseline",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+draw(xmod,
+     select = 2,
+     scales="free",
+     overall_uncertainty= TRUE,
+     residuals = TRUE,
+     palette = pal24
+     )
+```
+
+#### Long + BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re", "age_at_ftp_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_long_age_bl <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(age_at_ftp_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(age_at_ftp_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_long_age_bl_lin <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    age_at_ftp_bl +
+    # Linear interactions
+    age_at_ftp_bl:roi +
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_age_bl
+```
+
+```{r}
+# sum_mod_long_age_bl <- summary(xmod)
+aov_mod_long_age_bl <- anova(xmod)
+# ovv_mod_long_age_bl <- overview(xmod)
+aov_mod_long_age_bl
+```
+
+```{r}
+smooths(xmod)
+smooth_coefs(xmod, "s(roi)")
+smooth_estimates(xmod, "s(roi)")
+```
+
+##### Compare models
+```{r}
+# Test nonlinear age vs. linear age models
+smod <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(age_at_ftp_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(age_at_ftp_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+
+lmod <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    age_at_ftp_bl +
+    # Linear interactions
+    age_at_ftp_bl:roi +
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+```
+
+```{r}
+AIC(smod, lmod)
+```
+
+```{r}
+anova(smod, lmod, test = "F")
+```
+
+##### Predict values
+```{r}
+# Get model estimates in each region, respectively
+xvals <- seq(45, 66, by = 0.1)
+pred_df <- data.frame(
+  roi = rep(rois, each = length(xvals)),
+  # suvr_bl_re = rep(xvals, length(rois))
+  age_at_ftp_bl = rep(xvals, length(rois))
+  )
+preds <- predict.bam(xmod,
+                     type = "response",
+                     newdata = pred_df,
+                     se.fit = TRUE,
+                     exclude = c("s(subj)", "s(suvr_bl_re)", "s(suvr_bl_re,roi)"),
+                     newdata.guaranteed = TRUE
+                     )
+pred_df$fit <- preds$fit
+pred_df$sem <- preds$se.fit
+
+# Get model estimates across regions (excluding region terms)
+pred_df_ <- data.frame(
+  # roi = rep("all", length(xvals)),
+  # suvr_bl_re = rep(xvals, 1)
+  age_at_ftp_bl = rep(xvals, length(rois))
+  )
+preds_ <- predict.bam(xmod,
+                      type = "response",
+                      newdata = pred_df_,
+                      se.fit = TRUE,
+                      terms = c("(Intercept)", "s(age_at_ftp_bl)"),
+                      exclude = "s(subj)",
+                      newdata.guaranteed = TRUE
+                      )
+pred_df_ <- cbind(roi = rep("all", nrow(pred_df_)), pred_df_)
+pred_df_$fit <- preds_$fit
+pred_df_$sem <- preds_$se.fit
+
+# Concat
+pred_df <- rbind(pred_df_, pred_df)
+```
+
+##### Plot model
+
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         ylim = c(-0.06, 0.12),
+         # ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+roi <- "global"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+df_ = data.frame(df)
+df_min <- df_ %>%
+    group_by(subj) %>%
+    summarise(age_at_ftp_bl = min(age_at_ftp_bl),
+              chg_yr_re = min(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, age_at_ftp_bl, chg_yr_re)
+df_max <- df_ %>%
+    group_by(subj) %>%
+    summarise(age_at_ftp_bl = max(age_at_ftp_bl),
+              chg_yr_re = max(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, age_at_ftp_bl, chg_yr_re)
+df_ = rbind(df_min, df_max, df_[, c("subj", "roi", "age_at_ftp_bl", "chg_yr_re")])
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(age_at_ftp_bl, 0.025),
+  #        qhigh = quantile(age_at_ftp_bl, 0.975)) %>%
+  # filter((age_at_ftp_bl >= qlow) & (age_at_ftp_bl <= qhigh)) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    data = df, aes(x = age_at_ftp_bl, y = chg_yr_re, color=roi),
+    # data = resid_df, aes(x = age_at_ftp_bl, y = resid, color=roi),
+    size = 0.1, alpha = 0.67, color = gray3) +
+  geom_line(aes(x = age_at_ftp_bl, y = fit, color = roi), size = 1.2) +
+  geom_ribbon(aes(x = age_at_ftp_bl, y = fit, fill = roi,
+                  ymin = fit - sem, ymax = fit + sem),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(45, 66),
+    breaks=seq(45, 65, 5),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(-0.06, 0.12),
+    breaks=c(-0.06, -0.03, 0, 0.03, 0.06, 0.09, 0.12),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "Age at baseline",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+```{r}
+roi <- "frontal"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(df_$age_at_ftp_bl[df_$roi == roi], 0.025),
+  #        qhigh = quantile(df_$age_at_ftp_bl[df_$roi == roi], 0.975)) %>%
+  # filter(age_at_ftp_bl >= qlow & age_at_ftp_bl <= qhigh) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+# ggplot(pred_df_sub,
+#        aes(x = age_at_ftp_bl, y = fit, color = roi)) +
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    # data = resid_df[resid_df$roi %in% select_rois, ],
+    # aes(x = age_at_ftp_bl, y = resid, color=roi),
+    data = df[df$roi %in% select_rois, ],
+    aes(x = age_at_ftp_bl, y = chg_yr_re, color=roi),
+    size = 0.1, alpha = 0.67) +
+  geom_line(aes(x = age_at_ftp_bl, y = fit, color = roi), size = 1.5) +
+  geom_ribbon(aes(x = age_at_ftp_bl, y = fit, color = roi,
+                  ymin = fit - sem, ymax = fit + sem, fill = roi),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(45, 66),
+    breaks=seq(45, 65, 5),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(-0.06, 0.12),
+    breaks=c(-0.06, -0.03, 0, 0.03, 0.06, 0.09, 0.12),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "Age at baseline",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+### Amyloid-PET
+
+#### Long + BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re", "fbb_cl_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_long_fbb_bl <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(age_at_ftp_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(age_at_ftp_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_age_bl_fs
+```
+
+```{r}
+sum_mod_long_age_bl <- summary(xmod)
+aov_mod_long_age_bl <- anova(xmod)
+ovv_mod_long_age_bl <- overview(xmod)
+# print(ovv_mod_long_age_bl)
+aov_mod_long_age_bl
+```
+
+```{r}
+smooths(mod_long_age_bl)
+smooth_coefs(mod_long_age_bl, "s(roi)")
+smooth_estimates(mod_long_age_bl, "s(roi)")
+```
+
+##### Compare models
+```{r}
+aov_res <- anova(mod_long_age_bl, mod_long_age_bl_noageroi, test = "F")
+print(aov_res)
+```
+
+```{r}
+aov_res <- anova(mod_long_age_bl_fs, mod_long_bl_fs, test = "F")
+print(aov_res)
+```
+
+```{r}
+AIC(mod_long_age_bl, mod_long_age_bl_fs)
+```
+
+```{r}
+anova(mod_long_age_bl, mod_long_age_bl_fs, test = "F")
+```
+
+##### Plot model
+```{r}
+# 2, 3, 52
+plot.gam(xmod,
+         select = 1,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(-0.2, 0.2),
+         scheme = 2,
+         xlab = "Baseline FTP SUVR",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Baseline FTP"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "Age at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: Age at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+### CDR-SB
+
+#### BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "cdr_sb_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_bl_cdr <- bam(
+  suvr_bl_re ~
+    # Smooth main effects
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(cdr_sb_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(cdr_sb_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_bl_cdr_lin <- bam(
+  suvr_bl_re ~
+    # Linear main effects
+    cdr_sb_bl +
+    roi +
+    # Linear interactions
+    cdr_sb_bl:roi +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Compare models
+```{r}
+# Test nonlinear CDR-SB vs. linear CDR-SB models
+smod <- bam(
+  suvr_bl_re ~
+    # Smooth main effects
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(cdr_sb_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(cdr_sb_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+
+lmod <- bam(
+  suvr_bl_re ~
+    # Linear main effects
+    cdr_sb_bl +
+    roi +
+    # Linear interactions
+    cdr_sb_bl:roi +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+```
+
+```{r}
+AIC(smod, lmod)
+```
+
+```{r}
+anova(smod, lmod, test = "F")
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- lmod
+```
+
+```{r}
+# sum_mod_bl_cdr <- summary(xmod)
+aov_mod_bl_cdr <- anova(xmod)
+# ovv_mod_bl_cdr <- overview(xmod)
+aov_mod_bl_cdr
+```
+
+```{r}
+smooths(xmod)
+smooth_coefs(xmod, "s(roi)")
+smooth_estimates(xmod, "s(roi)")
+```
+
+##### Predict values
+```{r}
+# Get model estimates in each region, respectively
+xvals <- seq(0, 8, by = 0.1)
+pred_df <- data.frame(
+  roi = rep(rois, each = length(xvals)),
+  # suvr_bl_re = rep(xvals, length(rois))
+  cdr_sb_bl = rep(xvals, length(rois))
+  )
+preds <- predict.bam(xmod,
+                     type = "response",
+                     newdata = pred_df,
+                     se.fit = TRUE,
+                     exclude = c("s(subj)"),
+                     newdata.guaranteed = TRUE
+                     )
+pred_df$fit <- preds$fit
+pred_df$sem <- preds$se.fit
+
+# Get model estimates across regions (excluding region terms)
+pred_df_ <- data.frame(
+  # roi = rep("all", length(xvals)),
+  # suvr_bl_re = rep(xvals, 1)
+  cdr_sb_bl = rep(xvals, length(rois))
+  )
+preds_ <- predict.bam(xmod,
+                      type = "response",
+                      newdata = pred_df_,
+                      se.fit = TRUE,
+                      terms = c("(Intercept)", "s(cdr_sb_bl)"),
+                      exclude = "s(subj)",
+                      newdata.guaranteed = TRUE
+                      )
+pred_df_ <- cbind(roi = rep("all", nrow(pred_df_)), pred_df_)
+pred_df_$fit <- preds_$fit
+pred_df_$sem <- preds_$se.fit
+
+# Concat
+pred_df <- rbind(pred_df_, pred_df)
+```
+
+##### Plot model
+
+```{r}
+plot.gam(xmod,
+         select = 1,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         # ylim = c(-0.06, 0.12),
+         # ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "CDR-SB at baseline",
+         ylab = "18F-FTP SUVR at baseline",
+         main = "Main effect: CDR-SB at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+roi <- "global"
+ebar <- "sem" # sem or 95ci
+
+# Define parameters
+sem_mult <- ifelse(ebar == "sem", 1, 1.96)
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+df_ = data.frame(df)
+df_min <- df_ %>%
+    group_by(subj) %>%
+    summarise(cdr_sb_bl = min(cdr_sb_bl),
+              suvr_bl_re = min(suvr_bl_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, cdr_sb_bl, suvr_bl_re)
+df_max <- df_ %>%
+    group_by(subj) %>%
+    summarise(cdr_sb_bl = max(cdr_sb_bl),
+              suvr_bl_re = max(suvr_bl_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, cdr_sb_bl, suvr_bl_re)
+df_ = rbind(df_min, df_max, df_[, c("subj", "roi", "cdr_sb_bl", "suvr_bl_re")])
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(cdr_sb_bl, 0.025),
+  #        qhigh = quantile(cdr_sb_bl, 0.975)) %>%
+  # filter((cdr_sb_bl >= qlow) & (cdr_sb_bl <= qhigh)) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  # geom_point(
+  #   data = df, aes(x = cdr_sb_bl, y = suvr_bl_re, color=roi),
+  #   # data = resid_df, aes(x = cdr_sb_bl, y = resid, color=roi),
+  #   size = 0.1, alpha = 0.67, color = gray3) +
+  geom_jitter(data = df, aes(x = cdr_sb_bl, y = suvr_bl_re, color=roi),
+              width = 0.15, size = 0.1, alpha = 0.67, color = gray3) +
+  geom_line(aes(x = cdr_sb_bl, y = fit, color = roi), size = 1.2) +
+  geom_ribbon(aes(x = cdr_sb_bl, y = fit, fill = roi,
+                  ymin = fit - (sem * sem_mult), ymax = fit + (sem * sem_mult)),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(-0.5, 8.5),
+    breaks=seq(0, 8, 2),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    breaks=seq(1, 4.25, 0.5),
+    limits=c(0.85, 4.25),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "CDR-SB at baseline",
+       y = "18F-FTP SUVR at baseline",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+```{r}
+roi <- "parietal"
+ebar <- "95ci" # sem or 95ci
+
+# Define parameters
+sem_mult <- ifelse(ebar == "sem", 1, 1.96)
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+select_rois <- c("ipc", "v1")
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(df_$cdr_sb_bl[df_$roi == roi], 0.025),
+  #        qhigh = quantile(df_$cdr_sb_bl[df_$roi == roi], 0.975)) %>%
+  # filter(cdr_sb_bl >= qlow & cdr_sb_bl <= qhigh) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+# ggplot(pred_df_sub,
+#        aes(x = cdr_sb_bl, y = fit, color = roi)) +
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    # data = resid_df[resid_df$roi %in% select_rois, ],
+    # aes(x = cdr_sb_bl, y = resid, color=roi),
+    data = df[df$roi %in% select_rois, ],
+    aes(x = cdr_sb_bl, y = suvr_bl_re, color=roi),
+    size = 0.1, alpha = 0.67) +
+  geom_line(aes(x = cdr_sb_bl, y = fit, color = roi), size = 1.5) +
+  geom_ribbon(aes(x = cdr_sb_bl, y = fit, color = roi,
+                  ymin = fit - (sem * sem_mult), ymax = fit + (sem * sem_mult),
+                  fill = roi),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(-0.5, 8.5),
+    breaks=seq(0, 8, 2),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    breaks=c(1, 1.5, 2, 2.5, 3, 3.5),
+    limits=c(0.94, 3.88),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "CDR-SB at baseline",
+       y = "18F-FTP SUVR at baseline",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+#### Long + BL
+
+##### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re", "cdr_sb_bl")
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+```
+
+##### Fit model
+```{r}
+mod_long_cdr_bl <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(cdr_sb_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(cdr_sb_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+
+mod_long_cdr_bl_lin <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    cdr_sb_bl +
+    # Linear interactions
+    cdr_sb_bl:roi +
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE
+)
+```
+
+##### Inspect model
+```{r}
+# Choose the model to inspect
+xmod <- mod_long_cdr_bl
+```
+
+```{r}
+# sum_mod_long_cdr_bl <- summary(xmod)
+aov_mod_long_cdr_bl <- anova(xmod)
+# ovv_mod_long_cdr_bl <- overview(xmod)
+aov_mod_long_cdr_bl
+```
+
+```{r}
+smooths(xmod)
+smooth_coefs(xmod, "s(roi)")
+smooth_estimates(xmod, "s(roi)")
+```
+
+##### Compare models
+```{r}
+# Test nonlinear CDR-SB vs. linear CDR-SB models
+smod <- bam(
+  chg_yr_re ~
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    s(cdr_sb_bl, roi, bs="fs") +
+    # Smooth-smooth interactions
+    # ti(cdr_sb_bl, suvr_bl_re) +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+
+lmod <- bam(
+  chg_yr_re ~
+    # Linear main effects
+    cdr_sb_bl +
+    # Linear interactions
+    cdr_sb_bl:roi +
+    # Smooth main effects
+    s(suvr_bl_re, bs="tp") +
+    # Factor-smooth interactions
+    s(suvr_bl_re, roi, bs="fs") +
+    # Random effects
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  method = "ML"
+)
+```
+
+```{r}
+AIC(smod, lmod)
+```
+
+```{r}
+anova(smod, lmod, test = "F")
+```
+
+##### Predict values
+```{r}
+# Get model estimates in each region, respectively
+xvals <- seq(0, 8, by = 0.1)
+pred_df <- data.frame(
+  roi = rep(rois, each = length(xvals)),
+  # suvr_bl_re = rep(xvals, length(rois))
+  cdr_sb_bl = rep(xvals, length(rois))
+  )
+preds <- predict.bam(xmod,
+                     type = "response",
+                     newdata = pred_df,
+                     se.fit = TRUE,
+                     exclude = c("s(subj)", "s(suvr_bl_re)", "s(suvr_bl_re,roi)"),
+                     newdata.guaranteed = TRUE
+                     )
+pred_df$fit <- preds$fit
+pred_df$sem <- preds$se.fit
+
+# Get model estimates across regions (excluding region terms)
+pred_df_ <- data.frame(
+  # roi = rep("all", length(xvals)),
+  # suvr_bl_re = rep(xvals, 1)
+  cdr_sb_bl = rep(xvals, length(rois))
+  )
+preds_ <- predict.bam(xmod,
+                      type = "response",
+                      newdata = pred_df_,
+                      se.fit = TRUE,
+                      terms = c("(Intercept)", "s(cdr_sb_bl)"),
+                      exclude = "s(subj)",
+                      newdata.guaranteed = TRUE
+                      )
+pred_df_ <- cbind(roi = rep("all", nrow(pred_df_)), pred_df_)
+pred_df_$fit <- preds_$fit
+pred_df_$sem <- preds_$se.fit
+
+# Concat
+pred_df <- rbind(pred_df_, pred_df)
+```
+
+##### Plot model
+
+```{r}
+plot.gam(xmod,
+         select = 2,
+         rug = FALSE,
+         shade = TRUE,
+         residuals = TRUE,
+         all.terms = TRUE,
+         shift = fixef(xmod)[["(Intercept)"]],
+         seWithMean = TRUE,
+         unconditional = TRUE,
+         # col = blue2,
+         # shade.col = blue1,
+         ylim = c(-0.06, 0.12),
+         # ylim = c(-0.02, 0.15),
+         scheme = 2,
+         xlab = "CDR-SB at baseline",
+         ylab = "Predicted SUVR change/year",
+         main = "Main effect: CDR-SB at baseline"
+         )
+abline(0, 0, col=red2)
+```
+
+```{r}
+roi <- "global"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+df_ = data.frame(df)
+df_min <- df_ %>%
+    group_by(subj) %>%
+    summarise(cdr_sb_bl = min(cdr_sb_bl),
+              chg_yr_re = min(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, cdr_sb_bl, chg_yr_re)
+df_max <- df_ %>%
+    group_by(subj) %>%
+    summarise(cdr_sb_bl = max(cdr_sb_bl),
+              chg_yr_re = max(chg_yr_re)) %>%
+    mutate(roi = "all") %>%
+    select(subj, roi, cdr_sb_bl, chg_yr_re)
+df_ = rbind(df_min, df_max, df_[, c("subj", "roi", "cdr_sb_bl", "chg_yr_re")])
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(cdr_sb_bl, 0.025),
+  #        qhigh = quantile(cdr_sb_bl, 0.975)) %>%
+  # filter((cdr_sb_bl >= qlow) & (cdr_sb_bl <= qhigh)) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  # geom_point(
+  #   data = df, aes(x = cdr_sb_bl, y = chg_yr_re, color=roi),
+  #   # data = resid_df, aes(x = cdr_sb_bl, y = resid, color=roi),
+  #   size = 0.1, alpha = 0.67, color = gray3) +
+  geom_jitter(data = df, aes(x = cdr_sb_bl, y = chg_yr_re, color=roi),
+              width = 0.15, size = 0.1, alpha = 0.67, color = gray3) +
+  geom_line(aes(x = cdr_sb_bl, y = fit, color = roi), size = 1.2) +
+  geom_ribbon(aes(x = cdr_sb_bl, y = fit, fill = roi,
+                  ymin = fit - sem, ymax = fit + sem),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(-0.5, 8.5),
+    breaks=seq(0, 8, 2),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(-0.09, 0.18),
+    breaks=seq(-0.09, 0.18, 0.03),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "CDR-SB at baseline",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+```{r}
+roi <- "mtl"
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+select_rois <- c("amy")
+pred_df_sub <- pred_df %>%
+  filter(roi %in% select_rois) #%>%
+  # group_by(roi) %>%
+  # mutate(qlow = quantile(df_$cdr_sb_bl[df_$roi == roi], 0.025),
+  #        qhigh = quantile(df_$cdr_sb_bl[df_$roi == roi], 0.975)) %>%
+  # filter(cdr_sb_bl >= qlow & cdr_sb_bl <= qhigh) %>%
+  # ungroup() %>%
+  # select(-qlow, -qhigh)
+
+# Make plot
+# ggplot(pred_df_sub,
+#        aes(x = cdr_sb_bl, y = fit, color = roi)) +
+ggplot(pred_df_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    # data = resid_df[resid_df$roi %in% select_rois, ],
+    # aes(x = cdr_sb_bl, y = resid, color=roi),
+    data = df[df$roi %in% select_rois, ],
+    aes(x = cdr_sb_bl, y = chg_yr_re, color=roi),
+    size = 0.1, alpha = 0.67) +
+  geom_line(aes(x = cdr_sb_bl, y = fit, color = roi), size = 1.5) +
+  geom_ribbon(aes(x = cdr_sb_bl, y = fit, color = roi,
+                  ymin = fit - sem, ymax = fit + sem, fill = roi),
+              alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits=c(-0.5, 8.5),
+    breaks=seq(0, 8, 2),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(-0.06, 0.12),
+    breaks=c(-0.06, -0.03, 0, 0.03, 0.06, 0.09, 0.12),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = append(black, pal24),
+                       name = "Region",
+                       limits = roi_map[[roi]][["rois"]], 
+                       labels = roi_map[[roi]][["labels"]]) +
+  scale_fill_discrete(type = append(black, pal24),
+                      name = "Region",
+                      limits = roi_map[[roi]][["rois"]], 
+                      labels = roi_map[[roi]][["labels"]]) +
+  # guides(color = FALSE, fill = FALSE) +
+  labs(x = "CDR-SB at baseline",
+       y = "18F-FTP SUVR Δ/year",
+       title = roi_map[[roi]]) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+## Full models
+
+### Long: Full GAM + BL
+
+#### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "age_at_ftp_bl", "sex", "fbb_cl_bl",
+                "apoe4_alleles", "cdr_sb_bl"
+                )
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+# df$apoe4_alleles <- factor(df$apoe4_alleles, ordered = FALSE)
+# contrasts(df$apoe4_alleles) <- 'contr.sum'
+contrasts(df$roi) <- 'contr.sum'
+contrasts(df$sex) <- 'contr.sum'
+```
+
+#### Load fitted models
+```{r}
+mod_dir <- "/Users/dschonhaut/box/projects/leads_tau_spread/analysis/r_models/gam"
+mod_date <- "2023-06-15"
+mod_name <- "mod_long_sbl_ml"
+filepath <- file.path(mod_dir, paste0(mod_name, "_", mod_date, ".rds"))
+mod_long_sbl_ml <- readRDS(filepath)
+```
+
+#### Fit fully-penalized model
+```{r}
+mod_long_full_pen <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    apoe4_alleles +
+    sex +
+    roi +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    apoe4_alleles:roi +
+    sex:roi +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_full_pen_sum <- summary(mod_long_full_pen)
+mod_bl_full_pen_sum <- summary(mod_bl_full_pen)
+```
+
+
+```{r}
+mod_long_roi_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_age_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_fbb_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(fbb_cl_bl) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_cdr_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(cdr_sb_bl) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_apoe_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(apoe4_alleles, bs = "re") +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(apoe4_alleles, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_sex_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.by.ml <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  method = "ML"
+)
+
+mod_long_full_pen_plin.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re)
+    + age_at_ftp_bl
+    + fbb_cl_bl
+    + cdr_sb_bl
+    + apoe4_alleles
+    + sex
+    + roi
+    # ROI interactions
+    + s(suvr_bl_re, by = roi, m = 1, id = 1)
+    + age_at_ftp_bl:roi
+    + fbb_cl_bl:roi
+    + cdr_sb_bl:roi
+    + apoe4_alleles:roi
+    + sex:roi
+    # Random effect covariates
+    + s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen_plin.by.ml <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re)
+    + age_at_ftp_bl
+    + fbb_cl_bl
+    + cdr_sb_bl
+    + apoe4_alleles
+    + sex
+    + roi
+    # ROI interactions
+    + s(suvr_bl_re, by = roi, m = 1, id = 1)
+    + age_at_ftp_bl:roi
+    + fbb_cl_bl:roi
+    + cdr_sb_bl:roi
+    + apoe4_alleles:roi
+    + sex:roi
+    # Random effect covariates
+    + s(subj, bs = "re"),
+  data = df,
+  method = "ML"
+)
+```
+
+```{r}
+AIC(
+  mod_long_roi_pen.by,
+  mod_long_age_pen.by,
+  mod_long_fbb_pen.by,
+  mod_long_cdr_pen.by,
+  mod_long_apoe_pen.by,
+  mod_long_sex_pen.by,
+  mod_long_full_pen.by
+)
+```
+
+
+```{r}
+mod_long_roi_pen.by.sum <- summary(mod_long_roi_pen.by)
+mod_long_age_pen.by.sum <- summary(mod_long_age_pen.by)
+mod_long_fbb_pen.by.sum <- summary(mod_long_fbb_pen.by)
+mod_long_cdr_pen.by.sum <- summary(mod_long_cdr_pen.by)
+mod_long_apoe_pen.by.sum <- summary(mod_long_apoe_pen.by)
+mod_long_sex_pen.by.sum <- summary(mod_long_sex_pen.by)
+mod_long_full_pen.by.sum <- summary(mod_long_full_pen.by)
+mod_long_full_pen_plin.by.sum <- summary(mod_long_full_pen_plin.by)
+```
+
+##### Disgard
+```{r}
+mod_long_agex_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    te(suvr_bl_re, age_at_ftp_bl) +
+    # ROI interactions
+    te(suvr_bl_re, age_at_ftp_bl, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_fbbx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    te(suvr_bl_re, fbb_cl_bl) +
+    # ROI interactions
+    te(suvr_bl_re, fbb_cl_bl, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_cdrx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    te(suvr_bl_re, cdr_sb_bl) +
+    # ROI interactions
+    te(suvr_bl_re, cdr_sb_bl, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+AIC(
+  mod_long_roi_pen.by,
+  mod_long_agex_pen.by,
+  mod_long_fbbx_pen.by,
+  mod_long_cdrx_pen.by
+)
+```
+
+
+```{r}
+mod_long_agex_pen.by.sum <- summary(mod_long_agex_pen.by)
+mod_long_fbbx_pen.by.sum <- summary(mod_long_fbbx_pen.by)
+mod_long_cdrx_pen.by.sum <- summary(mod_long_cdrx_pen.by)
+```
+
+```{r}
+mod_long_agexx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, age_at_ftp_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_fbbxx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(fbb_cl_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, fbb_cl_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_cdrxx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(cdr_sb_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, cdr_sb_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_apoexx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(apoe4_alleles, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 2) +
+    s(apoe4_alleles, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_sexx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    s(suvr_bl_re, by = sex, m = 1, id = 1) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 2) +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_fullxx_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, age_at_ftp_bl) +
+    ti(suvr_bl_re, fbb_cl_bl) +
+    ti(suvr_bl_re, cdr_sb_bl) +
+    s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1) +
+    s(suvr_bl_re, by = sex, m = 1, id = 2) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 3) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 4) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 5) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 6) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+AIC(
+  mod_long_roi_pen.by,
+  mod_long_age_pen.by,
+  mod_long_agex_pen.by,
+  mod_long_agexx_pen.by,
+  mod_long_fbb_pen.by,
+  mod_long_fbbx_pen.by,
+  mod_long_fbbxx_pen.by,
+  mod_long_cdr_pen.by,
+  mod_long_cdrx_pen.by,
+  mod_long_cdrxx_pen.by,
+  mod_long_apoexx_pen.by,
+  mod_long_sexx_pen.by,
+  mod_long_full_pen.by,
+  mod_long_fullxx_pen.by
+)
+```
+
+
+```{r}
+mod_long_agexx_pen.by.sum <- summary(mod_long_agexx_pen.by)
+mod_long_fbbxx_pen.by.sum <- summary(mod_long_fbbxx_pen.by)
+mod_long_cdrxx_pen.by.sum <- summary(mod_long_cdrxx_pen.by)
+mod_long_fullxx_pen.by.sum <- summary(mod_long_fullxx_pen.by)
+```
+
+```{r}
+mod_long_full_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, age_at_ftp_bl) +
+    ti(suvr_bl_re, fbb_cl_bl) +
+    ti(suvr_bl_re, cdr_sb_bl) +
+    s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1) +
+    s(suvr_bl_re, by = sex, m = 1, id = 2) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 3) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 4) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 5) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 6) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_roi_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_age_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, age_at_ftp_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_fbb_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(fbb_cl_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, fbb_cl_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_cdr_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(cdr_sb_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    ti(suvr_bl_re, cdr_sb_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_apoe_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(apoe4_alleles, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 2) +
+    s(apoe4_alleles, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_sex_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    s(suvr_bl_re, by = sex, m = 1, id = 1) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 2) +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_fulll_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # ti(suvr_bl_re, age_at_ftp_bl) +
+    # ti(suvr_bl_re, fbb_cl_bl) +
+    # ti(suvr_bl_re, cdr_sb_bl) +
+    # s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1) +
+    # s(suvr_bl_re, by = sex, m = 1, id = 2) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 3) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 4) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 5) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 6) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_roi_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(roi, bs = "re") +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_roi_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_roi_tpen.by)
+
+mod_long_age_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # ti(suvr_bl_re, age_at_ftp_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_age_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(age_at_ftp_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # ti(suvr_bl_re, age_at_ftp_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_age_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_age_tpen.by)
+
+mod_long_fbb_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(fbb_cl_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # ti(suvr_bl_re, fbb_cl_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_fbb_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_fbb_tpen.by)
+
+mod_long_cdr_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(cdr_sb_bl) +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # ti(suvr_bl_re, cdr_sb_bl) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 2) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_cdr_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_cdr_tpen.by)
+
+mod_long_apoe_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re)
+    + s(apoe4_alleles, bs = "re")
+    + s(roi, bs = "re")
+    # BL-SUVR interactions
+    # + s(suvr_bl_re, by = apoe4_alleles, m = 1, id = 1)
+    # ROI interactions
+    + s(suvr_bl_re, by = roi, m = 1, id = 1)
+    + s(apoe4_alleles, roi, bs = "re")
+    # Random effect covariates
+    + s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_apoe_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_apoe_tpen.by)
+
+mod_long_sex_tpen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # BL-SUVR interactions
+    # s(suvr_bl_re, by = sex, m = 1, id = 1) +
+    # ROI interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  family = scat,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
+)
+family(mod_long_sex_tpen.by)$getTheta(trans = TRUE)
+gam.check(mod_long_sex_tpen.by)
+```
+
+
+```{r}
+mod_long_full_pen <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    s(apoe4_alleles, by = roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.bl <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, by = roi, m = 1, id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.age <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, by = roi, m = 1, id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.cdr <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen.apoe <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, by=roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_fulll_pen <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # BL-SUVR interactions
+    ti(age_at_ftp_bl, suvr_bl_re, bs = "tp") +
+    ti(fbb_cl_bl, suvr_bl_re, bs = "tp") +
+    ti(cdr_sb_bl, suvr_bl_re, bs = "tp") +
+    s(suvr_bl_re, by = apoe4_alleles, m = 1, id=1) +
+    s(suvr_bl_re, by = sex, m = 1, id = 2) +
+    # ROI interactions
+    s(suvr_bl_re, roi, bs = "fs") +
+    s(age_at_ftp_bl, roi, bs = "fs") +
+    s(fbb_cl_bl, roi, bs = "fs") +
+    s(cdr_sb_bl, roi, bs = "fs") +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs = "re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_full_pen.sum <- summary(mod_long_full_pen)
+mod_long_full_pen.by.sum <- summary(mod_long_full_pen.by)
+mod_long_full_pen.bl.sum <- summary(mod_long_full_pen.bl)
+mod_long_full_pen.age.sum <- summary(mod_long_full_pen.age)
+mod_long_full_pen.cdr.sum <- summary(mod_long_full_pen.cdr)
+mod_long_full_pen.apoe.sum <- summary(mod_long_full_pen.apoe)
+mod_long_fulll_pen.sum <- summary(mod_long_fulll_pen)
+mod_long_fulll_pen.by.sum <- summary(mod_long_fulll_pen.by)
+```
+
+```{r}
+mod_long_full_pend <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen1.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    s(roi, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(suvr_bl_re, apoe4_alleles, bs = "fs", id = 1) +
+    s(suvr_bl_re, sex, bs = "fs", id = 1) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen_1.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    ti(suvr_bl_re, age_at_ftp_bl, bs = "tp") +
+    ti(suvr_bl_re, fbb_cl_bl, bs = "tp") +
+    ti(suvr_bl_re, cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    ti(suvr_bl_re, age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    ti(suvr_bl_re, fbb_cl_bl, roi, bs = "fs", id = 3) +
+    ti(suvr_bl_re, cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen1.2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(suvr_bl_re, apoe4_alleles, bs = "fs", id = 5) +
+    s(suvr_bl_re, sex, bs = "fs", id = 6) +
+    s(suvr_bl_re, by = interaction(apoe4_alleles, roi), bs = "tp", id = 7) +
+    s(suvr_bl_re, by = interaction(sex, roi), bs = "tp", id = 8) +
+    # s(apoe4_alleles, roi, bs = "re") +
+    # s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen1.3 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 4) +
+    s(suvr_bl_re, apoe4_alleles, bs = "fs", id = 5) +
+    s(suvr_bl_re, sex, bs = "fs", id = 6) +
+    s(suvr_bl_re, apoe4_alleles, roi, bs = "sz", id = 7) +
+    s(suvr_bl_re, sex, roi, bs = "sz", id = 8) +
+    # s(apoe4_alleles, roi, bs = "re") +
+    # s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "sz", m = 2, id = 1) +
+    s(age_at_ftp_bl, roi, bs = "sz", m = 2, id = 2) +
+    s(fbb_cl_bl, roi, bs = "sz", m = 2, id = 3) +
+    s(cdr_sb_bl, roi, bs = "sz", m = 2, id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen4 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "sz", m = 2, id = 1) +
+    s(age_at_ftp_bl, roi, bs = "sz", m = 2, id = 2) +
+    s(fbb_cl_bl, roi, bs = "sz", m = 2, id = 3) +
+    s(cdr_sb_bl, roi, bs = "sz", m = 2, id = 4) +
+    s(suvr_bl_re, apoe4_alleles, bs = "sz", m = 2, id = 5) +
+    s(suvr_bl_re, sex, bs = "sz", m = 2, id = 6) +
+    s(suvr_bl_re, apoe4_alleles, roi, bs = "sz", m = 2, id = 7) +
+    s(suvr_bl_re, sex, roi, bs = "sz", m = 2, id = 8) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen5 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "sz", m = 2, id = 1) +
+    ti(suvr_bl_re, age_at_ftp_bl, roi, bs = "sz", m = 2, id = 2) +
+    ti(suvr_bl_re, fbb_cl_bl, roi, bs = "sz", m = 2, id = 3) +
+    ti(suvr_bl_re, cdr_sb_bl, roi, bs = "sz", m = 2, id = 4) +
+    s(suvr_bl_re, apoe4_alleles, bs = "sz", m = 2, id = 5) +
+    s(suvr_bl_re, sex, bs = "sz", m = 2, id = 6) +
+    s(suvr_bl_re, apoe4_alleles, roi, bs = "sz", m = 2, id = 7) +
+    s(suvr_bl_re, sex, roi, bs = "sz", m = 2, id = 8) +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_pen6 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(suvr_bl_re, roi, bs = "fs", m = 2, id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", m = 2, id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", m = 2, id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", m = 2, id = 4) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(suvr_bl_re, subj, bs = "fs", m = 2, id = 5),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+
+#### Run backward selection
+
+##### Round 1
+```{r}
+mod_long_full_0 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    # apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.3 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    # s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.4 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    # s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.5 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    # s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.6 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    # s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+```
+
+```{r}
+AIC(
+  mod_long_full_0,   # df = 352.3875, AIC = -13694.20
+  mod_long_full_0.1, # df = 331.1228, AIC = -13721.11*
+  mod_long_full_0.2, # df = 308.3928, AIC = -13667.90
+  mod_long_full_0.3, # df = 304.9270, AIC = -13589.84
+  mod_long_full_0.4, # df = 317.7187, AIC = -13661.80
+  mod_long_full_0.5  # df = 352.7180, AIC = -13693.45
+  )
+```
+
+##### Round 2
+```{r}
+mod_long_full_0.1.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    # apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.3 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    # s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.4 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    # s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.5 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    # s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.6 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    # s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+```
+
+```{r}
+AIC(
+  mod_long_full_0.1,   # df = 331.1228, AIC = -13721.11*
+  mod_long_full_0.1.1, # df = 331.4875, AIC = -13720.40
+  mod_long_full_0.1.2, # df = 287.9959, AIC = -13694.25
+  mod_long_full_0.1.3, # df = 284.1519, AIC = -13610.71
+  mod_long_full_0.1.4, # df = 297.6849, AIC = -13684.79
+  mod_long_full_0.1.5, # df = 331.7355, AIC = -13719.84
+  mod_long_full_0.1.6  # df = 307.8986, AIC = -13710.08
+)
+
+anova(mod_long_full_0.1, mod_long_full_0.1.1, test = "F") # Pr(>F) = 0.6014
+```
+
+##### Round 3
+```{r}
+mod_long_full_0.1.1.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    # apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.1.2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    # s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.1.3 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    # s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.1.4 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    # s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+mod_long_full_0.1.1.5 <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    # sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    # s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "ML"
+)
+```
+
+```{r}
+AIC(
+  mod_long_full_0.1.1,   # df = , AIC = 
+  mod_long_full_0.1.1.1, # df = , AIC = 
+  mod_long_full_0.1.1.2, # df = , AIC = 
+  mod_long_full_0.1.1.3, # df = , AIC = 
+  mod_long_full_0.1.1.4, # df = , AIC = 
+  mod_long_full_0.1.1.5  # df = , AIC = 
+)
+
+anova(mod_long_full_0.1.1, , test = "F") # Pr(>F) = 
+```
+
+##### Refit winning model with REML
+```{r}
+mod_long_full_0.1b <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    # sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_full.1 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(sex, bs = "re") +
+    s(apoe4_alleles, bs = "re") +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(sex, roi, bs="re") +
+    s(apoe4_alleles, roi, bs="re") +
+    s(suvr_bl_re, roi, bs = "fs", m = 2, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full.2 <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(sex, bs = "re") +
+    s(apoe4_alleles, bs = "re") +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    s(sex, roi, bs="re") +
+    s(apoe4_alleles, roi, bs="re") +
+    s(suvr_bl_re, roi, bs = "fs", m = 2, id = 1) +
+    s(age_at_ftp_bl, roi, bs = "fs", m = 2, id = 2) +
+    s(fbb_cl_bl, roi, bs = "fs", m = 2, id = 3) +
+    s(cdr_sb_bl, roi, bs = "fs", m = 2, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+AIC(mod_long_full.1)
+sum_mod_long_full.1 <- summary(mod_long_full.1)
+aov_mod_long_full.1 <- anova(mod_long_full.1)
+
+aov_mod_long_full.2 <- anova(mod_long_full.2)
+sum_mod_long_full.2 <- summary(mod_long_full.2)
+```
+
+
+
+```{r}
+mod_long_full_0.freml <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+pp <- list(
+  "roi" = list(rank = nlevels(df$roi) - 1, diag(nlevels(df$roi) - 1)),
+  "sex" = list(rank = nlevels(df$sex) - 1, diag(nlevels(df$sex) - 1)),
+  "apoe4_alleles" = list(rank = nlevels(df$apoe4_alleles) - 1,
+                       diag(nlevels(df$apoe4_alleles) - 1)),
+  "roi:sex" = list(rank = (nlevels(df$roi) - 1) * (nlevels(df$sex) - 1),
+                 diag((nlevels(df$roi) - 1) * (nlevels(df$sex) - 1))),
+  "roi:apoe4_alleles" = list(rank = (nlevels(df$roi) - 1) * (nlevels(df$apoe4_alleles) - 1),
+                           diag((nlevels(df$roi) - 1) * (nlevels(df$apoe4_alleles) - 1)))
+)
+mod_long_full_0.pen <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  paraPen = pp,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+AIC(mod_long_full_0.freml,
+    mod_long_full_0.pen)
+
+sum_mod_long_full_0.freml <- summary(mod_long_full_0.freml)
+sum_mod_long_full_0.pen <- summary(mod_long_full_0.pen)
+
+```
+
+
+#### Fit pen model
+```{r}
+# Setup ridge penalty for the fixed effect terms
+pen <- list(
+  roi = list(rank = nlevels(df$roi) - 1, diag(nlevels(df$roi) - 1)),
+  sex = list(rank = nlevels(df$sex) - 1, diag(nlevels(df$sex) - 1)),
+  apoe4_alleles = list(rank = nlevels(df$apoe4_alleles) - 1,
+                       diag(nlevels(df$apoe4_alleles) - 1))
+)
+mod_long_full_pen <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs = "tp") +
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by = roi, bs = "tp", m = 1, id = 1) +
+    s(age_at_ftp_bl, by = roi, bs = "tp", m = 1, id = 2) +
+    s(fbb_cl_bl, by = roi, bs = "tp", m = 1, id = 3) +
+    s(cdr_sb_bl, by = roi, bs = "tp", m = 1, id = 4) +
+    # Random effects
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian(),
+  select = TRUE,
+  paraPen = pen,
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+
+#### Fit model
 ```{r}
 mod_long_full_gam_addbl <- bam(
   chg_yr_re ~
@@ -135,13 +4563,86 @@ mod_long_full_gam_addbl <- bam(
     s(fbb_cl_bl, by=roi, m=1, bs="tp") +
     s(cdr_sb_bl, by=roi, m=1, bs="tp") +
     # Random effects
-    s(subj, bs="re"),
-  data=df,
-  family=gaussian
+    s(subj, bs = "re"),
+  data = df,
+  family = gaussian,
+  select = TRUE
 )
 ```
 
-##### Inspect model
+```{r}
+mod_long_bl <- bam(
+  chg_yr_re ~
+    roi +
+    s(suvr_bl_re, bs="tp") +
+    s(suvr_bl_re, by=roi, bs="tp", m=1, id=1) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  discrete = TRUE
+)
+
+mod_long_full <- bam(
+  chg_yr_re ~
+    # Main effects
+    roi +
+    sex +
+    apoe4_alleles +
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    # Interactions
+    sex:roi +
+    apoe4_alleles:roi +
+    s(suvr_bl_re, by=roi, bs="tp", m=1, id=1) +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=2) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=3) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=4) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  discrete = TRUE
+)
+
+mod_long_full2 <- bam(
+  chg_yr_re ~
+    roi +
+    sex +
+    apoe4_alleles +
+    sex:roi +
+    apoe4_alleles:roi +
+    apoe4_alleles:sex +
+    s(suvr_bl_re, bs="tp") +
+    s(age_at_ftp_bl, bs="tp") +
+    s(fbb_cl_bl, bs="tp") +
+    s(cdr_sb_bl, bs="tp") +
+    s(suvr_bl_re, by=roi, bs="tp", m=1, id=1) +
+    s(age_at_ftp_bl, by=roi, bs="tp", m=1, id=2) +
+    s(fbb_cl_bl, by=roi, bs="tp", m=1, id=3) +
+    s(cdr_sb_bl, by=roi, bs="tp", m=1, id=4) +
+    s(age_at_ftp_bl, by=apoe4_alleles, bs="tp", m=1, id=5) +
+    s(fbb_cl_bl, by=apoe4_alleles, bs="tp", m=1, id=6) +
+    s(subj, bs="re"),
+  data=df,
+  family=gaussian,
+  select = TRUE,
+  discrete = TRUE
+)
+```
+
+#### Compare models
+```{r}
+AIC(mod_long_full_gam_addbl, mod_long_full_lin_addbl)
+```
+
+```{r}
+anova(mod_long_full_gam_addbl, mod_long_full_lin_addbl, test="F")
+```
+
+#### Inspect model
 ```{r}
 gam.check(mod_long_full_gam_addbl)
 ```
@@ -158,7 +4659,415 @@ summary(mod_long_full_gam_addbl)
 overview(mod_long_full_gam_addbl, stars=T)
 ```
 
-##### Plot smooths
+#### Predict values
+```{r}
+# Fit
+b2 <- gam(co2 ~ s(month, bs = "cc") + s(c.month, bs = "cr", k = 300),
+          data = co2s, method = 'REML',
+          knots = list(month = c(0.5, 12.5)))
+
+# Predict
+nr <- nrow(co2s)
+pd2 <- with(co2s, data.frame(c.month = 1:(nr+36),
+                             month = rep(1:12, length.out=nr+36)))
+pd2 <- cbind(pd2, predict(b2, pd2, se = TRUE))
+pd2 <- transform(pd2, upr = fit + (2*se.fit), lwr = fit - (2 * se.fit))
+
+# Plot
+ggplot(pd2, aes(x = c.month, y = fit)) +
+    geom_ribbon(aes(ymin = lwr, ymax = upr), alpha = 0.2) +
+    geom_line(data = co2s, aes(c.month, co2), col = 'red') +
+    geom_line(alpha = 0.5)
+```
+
+```{r}
+# Fit
+knots <- list(DoY = c(0.5, 366.5))
+m <- bam(MEASUREMENT ~
+             s(ToD, k = 10) +
+             s(DoY, k = 12, bs = 'cc') +
+             s(YEAR, k = 30) +
+             s(LONGITUDE, LATITUDE, k = 100, bs = 'ds', m = c(1, 0.5)) +
+             ti(DoY, YEAR, bs = c('cc', 'tp'), k = c(12, 15)) +
+             ti(LONGITUDE, LATITUDE, ToD, d = c(2,1), bs = c('ds','tp'),
+                m = list(c(1, 0.5), NA), k = c(20, 10)) +
+             ti(LONGITUDE, LATITUDE, DoY, d = c(2,1), bs = c('ds','cc'),
+                m = list(c(1, 0.5), NA), k = c(25, 12)) +
+             ti(LONGITUDE, LATITUDE, YEAR, d = c(2,1), bs = c('ds','tp'),
+                m = list(c(1, 0.5), NA), k = c(25, 15)),
+         data = galveston, method = 'fREML', knots = knots,
+         nthreads = c(4, 1), discrete = TRUE)
+
+# Predict 1
+pdata <- with(galveston,
+              expand.grid(ToD = 12,
+                          DoY = 180,
+                          YEAR = seq(min(YEAR), max(YEAR), by = 1),
+                          LONGITUDE = seq(min(LONGITUDE), max(LONGITUDE), length = 100),
+                          LATITUDE  = seq(min(LATITUDE), max(LATITUDE), length = 100)))
+fit <- predict(m, pdata)
+ind <- exclude.too.far(pdata$LONGITUDE, pdata$LATITUDE,
+                       galveston$LONGITUDE, galveston$LATITUDE, dist = 0.1)
+fit[ind] <- NA
+pred <- cbind(pdata, Fitted = fit)
+
+# Plot 1
+plt <- ggplot(pred, aes(x = LONGITUDE, y = LATITUDE)) +
+    geom_raster(aes(fill = Fitted)) + facet_wrap(~ YEAR, ncol = 12) +
+    scale_fill_viridis(name = expression(degree*C), option = 'plasma', na.value = 'transparent') +
+    coord_quickmap() +
+    theme(legend.position = 'right')
+plt
+
+# Predict 2
+pdata <- with(galveston,
+              expand.grid(ToD = 12,
+                          DoY = c(1, 90, 180, 270),
+                          YEAR = seq(min(YEAR), max(YEAR), length = 500),
+                          LONGITUDE = -94.8751,
+                          LATITUDE  = 29.50866))
+fit <- data.frame(predict(m, newdata = pdata, se.fit = TRUE))
+fit <- transform(fit, upper = fit + (2 * se.fit), lower = fit - (2 * se.fit))
+pred <- cbind(pdata, fit)
+
+# Plot 2
+plt2 <- ggplot(pred, aes(x = YEAR, y = fit, group = factor(DoY))) +
+    geom_ribbon(aes(ymin = lower, ymax = upper), fill = 'grey', alpha = 0.5) +
+    geom_line() + facet_wrap(~ DoY, scales = 'free_y') +
+    labs(x = NULL, y = expression(Temperature ~ (degree * C)))
+plt2
+```
+
+#### Plot smooths
+
+##### Baseline SUVR: Global
+```{r}
+# xmod <- mod_long_roi_pen.by
+xmod <- mod_long_roi_pen.by
+
+# Get model residuals
+mod_terms <- predict(xmod, type="terms")
+icpt <- fixef(xmod)["(Intercept)"]
+dat <- data.frame(df)
+dat$mod <- "mod_long_roi_pen.by"
+dat$resid <- residuals.gam(xmod, type = "response")
+dat$presid <- (dat$resid
+                 + icpt
+                 + mod_terms[,c("s(suvr_bl_re)")]
+                 # + mod_terms[,c("s(subj)")]
+               )
+
+# Get model estimates
+xrng <- round(quantile(df$suvr_bl_re, c(0.025, 0.975)), 1)
+xmin <- xrng[1]
+xmax <- xrng[2]
+xvals <- seq(xmin, xmax, by = 0.01)
+pred <- with(df,
+             expand.grid(
+               suvr_bl_re = xvals,
+               age_at_ftp_bl = 0,
+               fbb_cl_bl = 0,
+               cdr_sb_bl = 0,
+               apoe4_alleles = "0",
+               sex = "f",
+               roi = "acc",
+               subj = "LDS0070166"
+               )
+             )
+pred <- cbind(
+  pred,
+  data.frame(
+    predict(
+      xmod,
+      newdata = pred,
+      se.fit = TRUE,
+      terms = c("s(suvr_bl_re)"),
+      newdata.guaranteed = TRUE
+      )
+    )
+  )
+pred$fit <- pred$fit + icpt
+pred$roi <- "all"
+pred <- transform(pred, upper = fit + (2 * se.fit), lower = fit - (2 * se.fit))
+```
+
+```{r}
+roi <- "global"
+# ymin <- -0.005
+# ymax <- 0.085
+# yrng <- c(ymin, ymax)
+yrng <- round(quantile(df$chg_yr_re, c(0.025, 0.975)), 2)
+ymin <- yrng[1]
+ymax <- yrng[2]
+
+# Get the data
+select_rois <- roi_map[[roi]][["rois"]]
+pred_sub <- pred
+# pred_sub <- pred %>%
+#   filter(roi %in% select_rois) %>%
+#   group_by(roi) %>%
+#   mutate(qlow = quantile(df_$suvr_bl_re[df_$roi == roi], 0.025),
+#          qhigh = quantile(df_$suvr_bl_re[df_$roi == roi], 0.975)) %>%
+#   filter(suvr_bl_re >= qlow & suvr_bl_re <= qhigh) %>%
+#   ungroup() %>%
+#   select(-qlow, -qhigh)
+
+# Make plot
+ggplot(pred_sub) +
+  geom_hline(yintercept = 0, color = black) +
+  geom_point(
+    data = dat, aes(x = suvr_bl_re, y = presid),
+    # data = dat, aes(x = suvr_bl_re, y = chg_yr_re),
+    size = 0.1, alpha = 0.67, color = black
+    ) +
+  geom_line(
+    aes(x = suvr_bl_re, y = fit, color = roi),
+    size = 1.2
+    ) +
+  geom_ribbon(
+    aes(x = suvr_bl_re, y = fit, ymin = lower, ymax = upper, fill = roi),
+    alpha = 0.15, color=NA
+    ) +
+  scale_x_continuous(
+    limits = c(xmin, xmax),
+    breaks = c(1.1, 1.5, 2, 2.5, 3, 3.5),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(ymin, ymax),
+    breaks = seq(0, 0.08, by = 0.02),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(
+    type = append(black, pal24),
+    name = "Region",
+    limits = roi_map[[roi]][["rois"]],
+    labels = roi_map[[roi]][["labels"]]
+    ) +
+  scale_fill_discrete(
+    type = append(black, pal24),
+    name = "Region",
+    limits = roi_map[[roi]][["rois"]],
+    labels = roi_map[[roi]][["labels"]]
+    ) +
+  labs(
+    x = "Baseline FTP SUVR",
+    y = "FTP SUVR change/year",
+       ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = rel(1.75), hjust = 0.5)
+    )
+```
+
+##### Age
+```{r}
+df$age_grp <- cut(
+  df$age_at_ftp_bl,
+  breaks = c(-Inf, 47.5, 52.5, 57.5, 62.5, 67.5, Inf),
+  labels = c("<55", "50", "55", "60", "65", ">65"),
+  ordered = TRUE)
+
+df$age_grp2 <- cut(
+  df$age_at_ftp_bl,
+  breaks = c(0, 55, 60, Inf),
+  labels = c("<55", "55-60", "60-65"),
+  ordered = TRUE)
+
+df$fbb_grp <- cut(
+  df$fbb_cl_bl,
+  breaks = c(-Inf, 70, 100, Inf),
+  labels = c("<70", "70-100", ">100"),
+  ordered = TRUE)
+
+df$cdr_grp <- cut(
+  df$cdr_sb_bl,
+  breaks = c(-Inf, 2.25, 4.25, Inf),
+  labels = c("0-2", "2.5-4", ">4"),
+  ordered = TRUE)
+```
+
+```{r}
+# Drop duplicates across specific rows
+df_ <- df %>%
+  distinct(subj, age_at_ftp_bl, fbb_cl_bl, cdr_sb_bl, apoe4_alleles, sex)
+
+# Group the data frame by roi and calculate the mean values
+df_agg <- df %>%
+  group_by(subj) %>%
+  summarize(suvr_bl_re = mean(suvr_bl_re),
+            chg_yr_re = mean(chg_yr_re))
+
+df_agg <- merge(df_, df_agg, by = "subj")
+
+df_agg$age_grp <- cut(
+  df_agg$age_at_ftp_bl,
+  breaks = c(-Inf, 47.5, 52.5, 57.5, 62.5, 67.5, Inf),
+  labels = c("<55", "50", "55", "60", "65", ">65"),
+  ordered = TRUE)
+
+df_agg$age_grp2 <- cut(
+  df_agg$age_at_ftp_bl,
+  breaks = c(0, 55, 60, Inf),
+  labels = c("<55", "55-60", "60-65"),
+  ordered = TRUE)
+
+df_agg$fbb_grp <- cut(
+  df_agg$fbb_cl_bl,
+  breaks = c(-Inf, 70, 100, Inf),
+  labels = c("<70", "70-100", ">100"),
+  ordered = TRUE)
+
+df_agg$cdr_grp <- cut(
+  df_agg$cdr_sb_bl,
+  breaks = c(-Inf, 2.25, 4.25, Inf),
+  labels = c("0-2", "2.5-4", ">4"),
+  ordered = TRUE)
+
+col_lims <- df_agg %>%
+  summarize(
+    age_low <- quantile(age_at_ftp_bl, 0.025),
+    age_high <- quantile(age_at_ftp_bl, 0.975),
+    fbb_low <- quantile(fbb_cl_bl, 0.025),
+    fbb_high <- quantile(fbb_cl_bl, 0.975),
+    cdr_low <- quantile(cdr_sb_bl, 0.025),
+    cdr_high <- quantile(cdr_sb_bl, 0.975)
+  )
+```
+
+```{r}
+qtls <- c(0, .025, .1, .2, .25, .333, .4, .5, .6, .667, .75, .8, .9, .975, 1)
+round(quantile(df_agg$age_at_ftp_bl, qtls), 1)
+round(quantile(df_agg$fbb_cl_bl, qtls), 1)
+round(quantile(df_agg$cdr_sb_bl, qtls), 1)
+df %>% group_by(age_grp) %>% summarize(
+  count = n(),
+  low = quantile(suvr_bl_re, c(0.025)),
+  high = quantile(suvr_bl_re, c(0.975))
+  )
+df_agg %>% group_by(age_grp) %>% summarize(
+  count = n(),
+  low = quantile(suvr_bl_re, c(0.025)),
+  high = quantile(suvr_bl_re, c(0.975))
+  )
+df_agg %>% group_by(fbb_grp) %>% summarize(count = n())
+df_agg %>% group_by(cdr_grp) %>% summarize(count = n())
+df_agg %>% group_by(apoe4_alleles) %>% summarize(count = n())
+df_agg %>% group_by(sex) %>% summarize(count = n())
+```
+
+```{r}
+# Get model estimates in each region, respectively
+xmod <- mod_long_fulll_pen.age
+
+# x50 <- seq(round(quantile(df[df$age_grp=="50", "suvr_bl_re"], 0.025), 2),
+#            round(quantile(df[df$age_grp=="50", "suvr_bl_re"], 0.975), 2),
+#            by = 0.01)
+x55 <- seq(round(quantile(df[df$age_grp=="55", "suvr_bl_re"], 0.025), 2),
+           round(quantile(df[df$age_grp=="55", "suvr_bl_re"], 0.975), 2),
+           by = 0.01)
+x60 <- seq(round(quantile(df[df$age_grp=="60", "suvr_bl_re"], 0.025), 2),
+           round(quantile(df[df$age_grp=="60", "suvr_bl_re"], 0.975), 2),
+           by = 0.01)
+x65 <- seq(round(quantile(df[df$age_grp=="65", "suvr_bl_re"], 0.025), 2),
+           round(quantile(df[df$age_grp=="65", "suvr_bl_re"], 0.975), 2),
+           by = 0.01)
+xrng <- round(quantile(df$suvr_bl_re, c(0.025, 0.975)), 1)
+xmin <- xrng[1]
+xmax <- xrng[2]
+xvals <- seq(xmin, xmax, by = 0.01)
+pred <- with(df,
+                data.frame(
+                  # suvr_bl_re = rep(xvals, 3),
+                  # age_at_ftp_bl = c(
+                  #   rep(55, length(xvals)),
+                  #   rep(60, length(xvals)),
+                  #   rep(65, length(xvals))
+                  # ),
+                  suvr_bl_re = c(x55, x60, x65),
+                  age_at_ftp_bl = c(
+                    rep(55, length(x55)),
+                    rep(60, length(x60)),
+                    rep(65, length(x65))
+                    ),
+                  fbb_cl_bl = 0,
+                  cdr_sb_bl = 0,
+                  apoe4_alleles = "0",
+                  sex = "m",
+                  roi = "acc",
+                  subj = "LDS0070166"
+                  ))
+xmin <- min(pred$suvr_bl_re)
+xmax <- max(pred$suvr_bl_re)
+xrng <- c(xmin, xmax)
+exclude_cols <- smooths(xmod)
+exclude_cols <- exclude_cols[!exclude_cols %in% c(
+  "s(suvr_bl_re)", "s(age_at_ftp_bl)", "ti(age_at_ftp_bl,suvr_bl_re)"
+  )]
+mfit <- predict(xmod,
+                 newdata = pred,
+                 se.fit = TRUE,
+                 exclude = exclude_cols,
+                 newdata.guaranteed = TRUE
+                 )
+mfit <- transform(mfit, upper = fit + (1 * se.fit), lower = fit - (1 * se.fit))
+pred <- cbind(pred, mfit)
+pred$roi <- "all"
+pred$age_at_ftp_bl <- factor(pred$age_at_ftp_bl)
+```
+
+```{r}
+roi <- "global"
+pal_ <- c(cyan2, blue2, blue3)
+# yrng <- round(quantile(df$chg_yr_re, c(0.025, 0.975)), 2)
+# ymin <- yrng[1]
+# ymax <- yrng[2]
+ymin <- -0.005
+ymax <- 0.085
+
+# Make plot
+ggplot() +
+  geom_hline(yintercept = 0, color = black) +
+  # geom_point(
+  #   data = df_agg,
+  #   aes(x = suvr_bl_re, y = chg_yr_re, color = age_grp2),
+  #   size = 0.5, alpha = 1) +
+  geom_line(
+    data = pred,
+    aes(x = suvr_bl_re, y = fit, color = age_at_ftp_bl),
+    size = 2) +
+  geom_ribbon(
+    data = pred,
+    aes(x = suvr_bl_re, y = fit, ymin = lower, ymax = upper, fill = age_at_ftp_bl),
+    alpha = 0.15, color=NA) +
+  scale_x_continuous(
+    limits = c(xmin - 0.1, xmax + 0.1),
+    breaks = c(1.1, 1.5, 2, 2.5, 3, 3.5),
+    expand = c(0, 0)
+    ) +
+  scale_y_continuous(
+    limits = c(ymin, ymax),
+    # breaks = seq(ymin, ymax, 0.03),
+    breaks = seq(0, 0.08, by = 0.02),
+    expand = c(0, 0)
+    ) +
+  scale_color_discrete(type = pal_) +
+  scale_fill_discrete(type = pal_,
+                      name = "Age at baseline",
+                      # limits = xage,
+                      # labels = xage
+                      ) +
+  guides(fill = FALSE) +
+  labs(x = "Baseline FTP SUVR",
+       y = "FTP SUVR change/year",
+       # title = "Main effect: Age"
+       ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = rel(1.75), hjust = 0.5))
+```
+
+
+#### More plots
 ```{r}
 draw(mod_long_full_gam_addbl,
      scales="free",
@@ -167,129 +5076,346 @@ draw(mod_long_full_gam_addbl,
      select=1
      )
 ```
+### Long: Full GAM, no BL
 
-##### Compare models
+#### Select data
 ```{r}
-AIC(mod_long_full_gam_addbl, mod_long_full_lin_addbl)
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "age_at_ftp_bl", "sex", "fbb_cl_bl",
+                "apoe4_alleles", "cdr_sb_bl"
+                )
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+contrasts(df$roi) <- 'contr.sum'
+contrasts(df$sex) <- 'contr.sum'
 ```
 
+#### Fit fully-penalized model
 ```{r}
-anova(mod_long_full_gam_addbl, mod_long_full_lin_addbl, test="F")
-```
-
-#### Long: Full GAM
-```{r}
-mod_long_full_gam <- bam(
+mod_long_full_nobl_pen <- bam(
   chg_yr_re ~
-    # Linear main effects
-    roi +
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_nobl_pen.by <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 3) +
+    s(apoe4_alleles, by = roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_nobl_pen.age <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_nobl_pen.fbb <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_nobl_pen.cdr <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_long_full_nobl_pen.apoe <- bam(
+  chg_yr_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, by = roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+```
+
+```{r}
+mod_long_full_nobl_pen.sum <- summary(mod_long_full_nobl_pen)
+mod_long_full_nobl_pen.by.sum <- summary(mod_long_full_nobl_pen.by)
+mod_long_full_nobl_pen.age.sum <- summary(mod_long_full_nobl_pen.age)
+mod_long_full_nobl_pen.fbb.sum <- summary(mod_long_full_nobl_pen.fbb)
+mod_long_full_nobl_pen.cdr.sum <- summary(mod_long_full_nobl_pen.cdr)
+mod_long_full_nobl_pen.apoe.sum <- summary(mod_long_full_nobl_pen.apoe)
+```
+
+
+### BL: Full GAM
+
+#### Select data
+```{r}
+# Copy the main dataframe.
+df <- data.frame(tau)
+
+# Remove rows with NA in any of the columns defined below.
+check_cols <- c("subj", "roi", "suvr_bl_re", "chg_yr_re",
+                "age_at_ftp_bl", "sex", "fbb_cl_bl",
+                "apoe4_alleles", "cdr_sb_bl"
+                )
+df <- df[complete.cases(df[,check_cols]), check_cols]
+df <- data.frame(lapply(df, function(x) if (is.factor(x)) droplevels(x) else x))
+contrasts(df$roi) <- 'contr.sum'
+contrasts(df$sex) <- 'contr.sum'
+```
+
+#### Fit fully-penalized model
+```{r}
+mod_bl_full_pen <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl) +
+    s(fbb_cl_bl) +
+    s(cdr_sb_bl) +
     apoe4_alleles +
     sex +
-    # Smooth main effects
-    s(age_at_ftp_bl, bs="tp") +
-    s(fbb_cl_bl, bs="tp") +
-    s(cdr_sb_bl, bs="tp") +
-    # Factor-factor interactions
+    roi +
+    # ROI interactions
+    s(age_at_ftp_bl, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 3) +
     apoe4_alleles:roi +
     sex:roi +
-    # Factor-smooth interactions
-    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
-    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
-    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
-    # Random effects
-    s(subj, bs="re"),
-  data=df,
-  family=gaussian
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  method = "fREML",
+  discrete = TRUE
 )
 
-mod_long_full_gam_re <- bam(
-  chg_yr_re ~
-    # Linear main effects
-    s(roi, bs="re") +
-    s(apoe4_alleles, bs="re") +
-    s(sex, bs="re") +
-    # Smooth main effects
-    s(age_at_ftp_bl, bs="tp") +
-    s(fbb_cl_bl, bs="tp") +
-    s(cdr_sb_bl, bs="tp") +
-    # Factor-factor interactions
-    s(apoe4_alleles, by=roi, bs="re", m=1) +
-    s(sex, by=roi, bs="re", m=1) +
-    # Factor-smooth interactions
-    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
-    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
-    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
-    # Random effects
-    s(subj, bs="re"),
-  data=df,
-  family=gaussian
+mod_bl_full_pen <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+
+
+mod_bl_full_pen.age <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, by = roi, m = 1, id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_bl_full_pen.fbb <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, by = roi, m = 1, id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_bl_full_pen.cdr <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, by = roi, m = 1, id = 3) +
+    s(apoe4_alleles, roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
+)
+
+mod_bl_full_pen.apoe <- bam(
+  suvr_bl_re ~
+    # Main effects
+    s(age_at_ftp_bl, bs = "tp") +
+    s(fbb_cl_bl, bs = "tp") +
+    s(cdr_sb_bl, bs = "tp") +
+    s(apoe4_alleles, bs = "re") +
+    s(sex, bs = "re") +
+    # Interactions
+    s(age_at_ftp_bl, roi, bs = "fs", id = 1) +
+    s(fbb_cl_bl, roi, bs = "fs", id = 2) +
+    s(cdr_sb_bl, roi, bs = "fs", id = 3) +
+    s(apoe4_alleles, by=roi, bs = "re") +
+    s(sex, roi, bs="re") +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  select = TRUE,
+  family = gaussian(),
+  method = "fREML",
+  discrete = TRUE
 )
 ```
 
-##### Inspect model
 ```{r}
-gam.check(mod_long_full_gam)
+mod_bl_full_pen.sum <- summary(mod_bl_full_pen)
+mod_bl_full_pen.by.sum <- summary(mod_bl_full_pen.by)
+mod_bl_full_pen.age.sum <- summary(mod_bl_full_pen.age)
+mod_bl_full_pen.fbb.sum <- summary(mod_bl_full_pen.fbb)
+mod_bl_full_pen.cdr.sum <- summary(mod_bl_full_pen.cdr)
+mod_bl_full_pen.apoe.sum <- summary(mod_bl_full_pen.apoe)
 ```
 
-```{r}
-appraise(mod_long_full_gam, method="simulate")
-```
-
-```{r}
-summary(mod_long_full_gam)
-```
-
-```{r}
-overview(mod_long_full_gam, stars=T)
-```
-
-```{r}
-overview(mod_long_full_gam_re, stars=T)
-```
-
-##### Plot smooths
-```{r}
-plot(mod_long_full_gam,
-     residuals=F,
-     scale=0,
-     all.terms=T,
-     shade=T,
-     seWithMean=T,
-     unconditional=T,
-     scheme=2,
-     pages=10
-     )
-```
-
-```{r}
-draw(mod_long_full_gam,
-     scales="free",
-     overall_uncertainty=T,
-     residuals=F,
-     select=1
-     )
-```
-
-```{r}
-draw(mod_long_full_gam_re,
-     scales="free",
-     overall_uncertainty=T,
-     residuals=F,
-     select=10
-     )
-```
-
-##### Compare models
-
-```{r}
-AIC(mod_long_full_gam, mod_long_full_gam_re)
-```
-
-```{r}
-anova(mod_long_full_gam, mod_long_full_gam_re, test="F")
-```
-
-#### BL: Full GAM
+#### Fit model
 ```{r}
 mod_bl_full_gam <- bam(
   suvr_bl_re ~
@@ -311,12 +5437,12 @@ mod_bl_full_gam <- bam(
     # Random effects
     s(subj, bs="re"),
   data=df,
-  family=gaussian
-  # select=TRUE
+  family=gaussian,
+  select=TRUE
 )
 ```
 
-##### Inspect model
+#### Inspect model
 ```{r}
 gam.check(mod_bl_full_gam)
 ```
@@ -333,7 +5459,7 @@ summary(mod_bl_full_gam)
 overview(mod_bl_full_gam, stars=T)
 ```
 
-##### Plot smooths
+### Plot smooths
 ```{r}
 draw(mod_bl_full_gam,
      scales="free",
@@ -342,36 +5468,3 @@ draw(mod_bl_full_gam,
      select=1
      )
 ```
-
-## Main effect models
-
-#### Full GAM - BL SUVR
-```{r}
-mod_long_full_gam <- bam(
-  chg_yr_re ~
-    # Linear main effects
-    roi +
-    apoe4_alleles +
-    sex +
-    # Smooth main effects
-    # s(suvr_bl_re, bs="tp") +
-    s(age_at_ftp_bl, bs="tp") +
-    s(fbb_cl_bl, bs="tp") +
-    s(cdr_sb_bl, bs="tp") +
-    # Factor-factor interactions
-    apoe4_alleles:roi +
-    sex:roi +
-    # Factor-smooth interactions
-    # s(suvr_bl_re, by=roi, m=1, bs="tp") +
-    s(age_at_ftp_bl, by=roi, m=1, bs="tp") +
-    s(fbb_cl_bl, by=roi, m=1, bs="tp") +
-    s(cdr_sb_bl, by=roi, m=1, bs="tp") +
-    # Random effects
-    s(subj, bs="re"),
-  data=df,
-  family=gaussian
-  # method="ML",
-  # select=TRUE
-)
-```
-
