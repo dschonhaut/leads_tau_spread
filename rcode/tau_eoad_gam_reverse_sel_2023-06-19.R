@@ -9,7 +9,7 @@ data_dir <- "/Users/dschonhaut/Box/projects/leads_tau_spread/data/ssheets"
 data_file <- file.path(data_dir, "tau-eoad-re_2023-05-16.csv")
 save_dir <- "/Users/dschonhaut/box/projects/leads_tau_spread/analysis/r_models/gam/bward_sel/dv_chg_suvr_re"
 # today <- format(Sys.Date(), "%Y-%m-%d")
-today <- "2023-06-19"
+today <- "2023-06-24"
 overwrite = FALSE
 verbose = TRUE
 
@@ -1222,3 +1222,33 @@ par(mfrow = c(2, 2))
 gam.check(mod_long_full_r9_lin_age_reml)
 AIC(mod_long_full_r9_lin_age_reml)
 sum_mod_long_full_r9_lin_age_reml
+
+# ----------------
+mod_name <- "mod_long_full_r9_lin_age_roifs_reml"
+mod_long_full_r9_lin_age_roifs_reml <- gam(
+  chg_yr_re ~
+    # Main effects
+    s(suvr_bl_re) +
+    age_at_ftp_bl_mc +
+    # s(fbb_cl_bl) +
+    # s(cdr_sb_bl) +
+    apoe4_alleles_int +
+    # sex +
+    # roi +
+    # ROI interactions
+    s(suvr_bl_re, roi, bs = "fs") +
+    age_at_ftp_bl_mc:roi +
+    # s(fbb_cl_bl, by = roi, m = 1, id = 3) +
+    # s(cdr_sb_bl, by = roi, m = 1, id = 4) +
+    apoe4_alleles_int:roi +
+    # sex:roi +
+    # Random effect covariates
+    s(subj, bs = "re"),
+  data = df,
+  method = "REML"
+)
+filepath <- file.path(save_dir, paste0(mod_name, "_", today, ".rds"))
+save_obj(mod_long_full_r9_lin_age_roifs_reml, filepath, overwrite, verbose)
+sum_mod_long_full_r9_lin_age_roifs_reml <- summary(mod_long_full_r9_lin_age_roifs_reml)
+filepath <- file.path(save_dir, paste0("sum_", mod_name, "_", today, ".rds"))
+save_obj(sum_mod_long_full_r9_lin_age_roifs_reml, filepath, overwrite, verbose)
