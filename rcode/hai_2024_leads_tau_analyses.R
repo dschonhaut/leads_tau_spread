@@ -41,7 +41,7 @@ tau_mms <- read_csv(tau_mmsf)
 # Clean dataframes.
 transform_df <- function(df) {
   df %>%
-    filter(parc %in% c("metarois")) %>%
+    # filter(parc %in% c("metarois")) %>%
     mutate(across(where(is.character), as.factor)) %>%
     mutate(apoe4_alleles = factor(apoe4_alleles, ordered = TRUE)) %>%
     { contrasts(.$sex) <- 'contr.sum'; . }
@@ -271,8 +271,9 @@ p1 + p5 + p9 + plot_layout(ncol = 3)
 df <- as.tibble(tau_suvrs_wide)
 metarois <- c("temporal", "parietal", "frontal")
 bs = "cs"
+suvr_step <- 0.001 # predict in increments of this SUVR
 
-cutoffs <- tibble()#n = integer(0), xmin = numeric(0), xmax = numeric(0), ymin = numeric(0), ymax = numeric(0))
+cutoffs <- tibble()
 pred <- tibble()
 for (roi in metarois) {
   # Create variable names based on the current ROI
@@ -302,7 +303,7 @@ for (roi in metarois) {
       ymin = round(max(min(!!sym(dv)), quantile(!!sym(dv), 0.25) - (1.5 * IQR(!!sym(dv)))), 2),
       ymax = round(min(max(!!sym(dv)), quantile(!!sym(dv), 0.75) + (1.5 * IQR(!!sym(dv)))), 2)
     )
-  xvals <- seq(cutoffs_roi$xmin, cutoffs_roi$xmax, by = 0.01)
+  xvals <- seq(cutoffs_roi$xmin, cutoffs_roi$xmax, by = suvr_step)
 
   # Append the results to the cutoffs data frame
   cutoffs <- rbind(cutoffs, cutoffs_roi)
@@ -337,7 +338,7 @@ for (roi in metarois) {
 }
 
 # Save the output.
-pred_outputf <- file.path(data_dir, "tau-metarois-gam_preds_all-eoad-gt1ftp_2023-10-24.csv")
+pred_outputf <- file.path(data_dir, "tau-metarois-gam_preds_all-eoad-gt1ftp_2023-10-25.csv")
 write_csv(pred, pred_outputf)
 print(str_c("Saved", pred_outputf))
 
@@ -364,3 +365,60 @@ roi <- "frontal"
 df_roi <- df[df$roi == roi, ]
 model <- lmer(suvr ~ ftp_yrs_from_bl + (1 | subj) + (0 + ftp_yrs_from_bl | subj),
               data = df_roi)
+
+
+# Age, sex, etc.
+# Define inputs
+df <- as.tibble(tau_suvrs_wide)
+bs <- "cs"
+rois <- c("temporal", "parietal", "frontal")
+covs <- c("age_at_ftp_bl_mc", "fbb_cl_bl_mc", "cdr_sb_bl_mc", "mmse_bl_mc", "apoe4_alleles_mc", "sex")
+
+# Fit models for each ROI and covariate combination using nested map functions
+models_bl <- expand.grid(roi=rois, cov=covs) %>%
+  mutate(
+    dv = paste0("suvr_bl_", roi),
+    formula = paste0(dv, "~", cov),
+    model = pmap(list(formula, list(df)), ~ lm(as.formula(..1), data = ..2))
+  )
+models_chg <- expand.grid(roi=rois, cov=covs) %>%
+  mutate(
+    dv = paste0("suvr_annchg_from_last_", roi),
+    formula = paste0(dv, "~", cov),
+    model = pmap(list(formula, list(df)), ~ lm(as.formula(..1), data = ..2))
+  )
+models_gam <- expand.grid(roi=rois, cov=covs) %>%
+  mutate(
+    dv = paste0("suvr_annchg_from_last_", roi),
+    iv = paste0("s(suvr_bl_", roi, ", bs=bs)"),
+    formula = paste0(dv, "~", iv, "+", cov),
+    model = pmap(list(formula, list(df)), ~ gam(as.formula(..1), data = ..2, method="REML"))
+  )
+models_chg$model %>%
+  map(summary)
+# -----
+models_bl_full <- expand.grid(roi=rois) %>%
+  mutate(
+    dv = paste0("suvr_bl_", roi),
+    cov = paste("age_at_ftp_bl_mc", "fbb_cl_bl_mc", "mmse_bl_mc", "apoe4_alleles_mc", "sex", sep=" + "),
+    formula = paste0(dv, "~", cov),
+    model = pmap(list(formula, list(df)), ~ lm(as.formula(..1), data = ..2))
+  )
+models_chg_full <- expand.grid(roi=rois) %>%
+  mutate(
+    dv = paste0("suvr_annchg_from_last_", roi),
+    cov = paste("age_at_ftp_bl_mc", "fbb_cl_bl_mc", "mmse_bl_mc", "apoe4_alleles_mc", "sex", sep=" + "),
+    formula = paste0(dv, "~", cov),
+    model = pmap(list(formula, list(df)), ~ lm(as.formula(..1), data = ..2))
+  )
+models_gam_full <- expand.grid(roi=rois) %>%
+  mutate(
+    dv = paste0("suvr_annchg_from_last_", roi),
+    iv = paste0("s(suvr_bl_", roi, ", bs=bs)"),
+    cov = paste("age_at_ftp_bl_mc", "fbb_cl_bl_mc", "mmse_bl_mc", "apoe4_alleles_mc", "sex", sep=" + "),
+    formula = paste0(dv, "~", iv, "+", cov),
+    model = pmap(list(formula, list(df)), ~ gam(as.formula(..1), data = ..2, method="REML"))
+  )
+# Print the summary info for each fitted model
+models_gam_full$model %>%
+  map(summary)
